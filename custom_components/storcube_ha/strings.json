@@ -1,35 +1,26 @@
 {
   "config": {
-    "title": "StorCube Battery Monitor",
+    "title": "Storcube",
     "step": {
       "user": {
-        "title": "Configuration de StorCube",
-        "description": "Configurez la connexion à votre broker MQTT et vos identifiants Storcube Cloud.",
+        "title": "Configuration de Storcube",
+        "description": "Entrez vos identifiants Storcube Cloud et les détails de votre batterie.",
         "data": {
-          "host": "Broker (Hôte)",
-          "port": "Port",
-          "username": "Utilisateur MQTT",
-          "password": "Mot de passe MQTT",
-          "app_code": "Code Application",
-          "login_name": "Identifiant Storcube",
-          "device_password": "Mot de passe Storcube"
-        },
-        "data_description": {
-          "host": "Adresse IP ou nom d'hôte de votre broker MQTT (ex: 192.168.1.50).",
-          "port": "Le port du broker (par défaut : 1883).",
-          "app_code": "Code fourni par Storcube (souvent via l'application mobile).",
-          "login_name": "Le nom d'utilisateur utilisé pour se connecter à l'application Storcube."
+          "login_name": "Email / Identifiant",
+          "auth_password": "Mot de passe",
+          "device_id": "Device ID (ID de l'équipement)",
+          "host": "IP Broker MQTT (Optionnel)",
+          "port": "Port MQTT"
         }
       }
     },
     "error": {
-      "cannot_connect": "Échec de connexion au broker MQTT",
-      "invalid_auth": "Authentification MQTT incorrecte",
-      "invalid_device": "Identifiants Storcube ou Code App invalides",
-      "unknown": "Une erreur inattendue est survenue"
+      "cannot_connect": "Échec de connexion au serveur",
+      "invalid_auth": "Authentification incorrecte",
+      "unknown": "Erreur inattendue"
     },
     "abort": {
-      "already_configured": "Cet appareil ou compte est déjà configuré."
+      "already_configured": "Cet appareil est déjà configuré."
     }
   }
 }
