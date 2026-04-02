@@ -1,10 +1,7 @@
-"""The Storcube Battery Monitor Integration."""
+"""The Storcube integration."""
 from __future__ import annotations
 
 import logging
-import asyncio
-from datetime import timedelta
-
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
@@ -17,61 +14,67 @@ from .services import async_setup_services, async_unload_services
 
 _LOGGER = logging.getLogger(__name__)
 
-# Liste des plateformes à charger
+# Plateformes à charger (Sensor pour les données, Number pour les réglages)
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.NUMBER]
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Configuration via configuration.yaml (Ancienne méthode)."""
-    # Note: On favorise aujourd'hui le passage par l'interface UI (Config Flow)
+    """Configuration via configuration.yaml (non recommandé mais supporté)."""
     return True
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Configuration d'une instance via l'UI."""
     hass.data.setdefault(DOMAIN, {})
     
-    # Initialisation du coordinateur
+    # Initialisation du coordinateur personnalisé
     coordinator = StorCubeDataUpdateCoordinator(hass, entry)
     
     try:
-        # On attend la première récupération de données avant de continuer
+        # Premier rafraîchissement des données (bloquant pour valider la connexion)
         await coordinator.async_config_entry_first_refresh()
-        # Si vous avez une méthode setup personnalisée supplémentaire :
+        
+        # Initialisation spécifique au coordinateur (Websocket, etc.)
         if hasattr(coordinator, "async_setup"):
             await coordinator.async_setup()
             
-    except Exception as e:
-        _LOGGER.error("Erreur lors de l'initialisation du coordinateur StorCube: %s", e)
-        raise ConfigEntryNotReady from e
+    except Exception as err:
+        _LOGGER.error("Erreur d'initialisation Storcube pour %s: %s", entry.title, err)
+        raise ConfigEntryNotReady from err
 
-    # Stockage du coordinateur pour un accès facile
-    hass.data[DOMAIN][entry.entry_id] = coordinator
+    # Stockage des données de l'instance
+    hass.data[DOMAIN][entry.entry_id] = {
+        "coordinator": coordinator,
+    }
 
-    # Enregistrement des plateformes (sensor, number, etc.)
+    # Enregistrement des plateformes (sensor.py, number.py...)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     
-    # Configuration des services globaux de l'intégration
+    # Enregistrement des services (Set Power, Set Threshold)
+    # On ne les enregistre qu'une seule fois même si on a plusieurs batteries
     await async_setup_services(hass)
     
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Déchargement d'une instance."""
-    # Déchargement des plateformes
+    """Déchargement d'une instance de batterie."""
+    # 1. Déchargement des plateformes
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     
     if unload_ok:
-        coordinator = hass.data[DOMAIN].pop(entry.entry_id)
-        # Nettoyage si le coordinateur a une fonction shutdown
-        if hasattr(coordinator, "async_shutdown"):
+        # 2. Récupération et nettoyage du coordinateur
+        entry_data = hass.data[DOMAIN].pop(entry.entry_id)
+        coordinator = entry_data.get("coordinator")
+        
+        if coordinator and hasattr(coordinator, "async_shutdown"):
             await coordinator.async_shutdown()
         
-        # On ne décharge les services que s'il n'y a plus d'autre instance active
+        # 3. Nettoyage des services globaux 
+        # Uniquement s'il ne reste plus aucune instance Storcube active
         if not hass.data[DOMAIN]:
             await async_unload_services(hass)
+            hass.data.pop(DOMAIN)
 
     return unload_ok
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Rechargement de l'intégration."""
-    await async_unload_entry(hass, entry)
-    await async_setup_entry(hass, entry)
+    """Rechargement de l'intégration (utile après une erreur de connexion)."""
+    await hass.config_entries.async_reload(entry.entry_id)
