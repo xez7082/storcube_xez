@@ -2,11 +2,11 @@
   "domain": "storcube",
   "name": "Storcube",
   "version": "1.2.3",
+  "config_flow": true,
   "documentation": "https://github.com/xez7082/storcube_Ha",
   "issue_tracker": "https://github.com/xez7082/storcube_Ha/issues",
   "dependencies": ["mqtt"],
   "codeowners": ["@xez7082"],
   "requirements": ["aiohttp", "websockets"],
-  "iot_class": "cloud_polling",
-  "homeassistant": "2024.1.0"
+  "iot_class": "cloud_polling"
 }
