@@ -10,13 +10,15 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from .const import DOMAIN
 from .coordinator import StorCubeDataUpdateCoordinator
 
-# On se concentre sur SENSOR pour l'instant pour valider la communication
-PLATFORMS: list[Platform] = [Platform.SENSOR]
-
+# On force l'utilisation du nom de dossier actuel pour le log
 _LOGGER = logging.getLogger(__name__)
+
+PLATFORMS: list[Platform] = [Platform.SENSOR]
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Configuration d'une instance Storcube via l'UI."""
+    
+    _LOGGER.debug("Démarrage de l'intégration Storcube pour : %s", entry.title)
     
     # 1. Préparation du stockage
     hass.data.setdefault(DOMAIN, {})
@@ -24,33 +26,34 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # 2. Initialisation du coordinateur
     coordinator = StorCubeDataUpdateCoordinator(hass, entry)
     
-    # 3. Lancer la configuration (WebSocket / MQTT)
-    # On appelle async_setup du coordinateur s'il existe
+    # 3. Setup additionnel (WebSocket, etc.)
     if hasattr(coordinator, "async_setup"):
-        await coordinator.async_setup()
+        try:
+            await coordinator.async_setup()
+        except Exception as err:
+            _LOGGER.error("Erreur lors du setup du coordinateur : %s", err)
 
     # 4. Premier rafraîchissement des données
-    # Si ça échoue ici, HA affichera l'erreur dans les logs au démarrage
     try:
         await coordinator.async_config_entry_first_refresh()
     except Exception as err:
-        _LOGGER.error("Erreur lors du premier refresh Storcube: %s", err)
-        raise ConfigEntryNotReady(f"Connexion impossible : {err}") from err
+        _LOGGER.error("Impossible de récupérer les premières données Storcube : %s", err)
+        raise ConfigEntryNotReady(f"Erreur de connexion : {err}") from err
 
-    # 5. Stockage définitif AVANT de charger les capteurs
+    # 5. Stockage des objets
     hass.data[DOMAIN][entry.entry_id] = {
         "coordinator": coordinator,
     }
 
-    # 6. Chargement des plateformes (appelle sensor.py)
+    # 6. Lancement des capteurs (sensor.py)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     
-    # Optionnel : Services (vérifie que services.py existe bien dans ton dossier)
+    # Gestion des services optionnels
     try:
         from .services import async_setup_services
         await async_setup_services(hass)
-    except ImportError:
-        _LOGGER.debug("Fichier services.py non trouvé, ignore l'étape.")
+    except (ImportError, Exception):
+        _LOGGER.debug("Pas de fichier services.py ou erreur de chargement des services.")
 
     return True
 
@@ -59,9 +62,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     
     if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id)
+        if entry.entry_id in hass.data[DOMAIN]:
+            hass.data[DOMAIN].pop(entry.entry_id)
         
-        # Si plus aucune batterie, on nettoie le domaine
         if not hass.data[DOMAIN]:
             hass.data.pop(DOMAIN)
 
