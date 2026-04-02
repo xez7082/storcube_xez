@@ -9,75 +9,60 @@ from homeassistant.exceptions import ConfigEntryNotReady
 
 from .const import DOMAIN
 from .coordinator import StorCubeDataUpdateCoordinator
-from .services import async_setup_services, async_unload_services
+
+# On se concentre sur SENSOR pour l'instant pour valider la communication
+PLATFORMS: list[Platform] = [Platform.SENSOR]
 
 _LOGGER = logging.getLogger(__name__)
 
-# Plateformes à charger
-PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.NUMBER]
-
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Configuration d'une instance Storcube via l'UI."""
+    
+    # 1. Préparation du stockage
     hass.data.setdefault(DOMAIN, {})
     
-    # 1. Initialisation du coordinateur
+    # 2. Initialisation du coordinateur
     coordinator = StorCubeDataUpdateCoordinator(hass, entry)
     
-    try:
-        # 2. Lancer les écouteurs (WebSocket / MQTT) AVANT le refresh
-        # Cela permet d'avoir des données prêtes dès le premier cycle
-        if hasattr(coordinator, "async_setup"):
-            await coordinator.async_setup()
-            
-        # 3. Premier rafraîchissement des données REST
-        # On utilise async_config_entry_first_refresh pour bloquer l'UI tant que 
-        # la première connexion n'est pas validée (ou timeout après 60s)
-        await coordinator.async_config_entry_first_refresh()
-            
-    except Exception as err:
-        _LOGGER.error(
-            "Échec de l'initialisation Storcube pour %s: %s", 
-            entry.title, 
-            err
-        )
-        raise ConfigEntryNotReady from err
+    # 3. Lancer la configuration (WebSocket / MQTT)
+    # On appelle async_setup du coordinateur s'il existe
+    if hasattr(coordinator, "async_setup"):
+        await coordinator.async_setup()
 
-    # 4. Stockage du coordinateur pour accès par les plateformes
+    # 4. Premier rafraîchissement des données
+    # Si ça échoue ici, HA affichera l'erreur dans les logs au démarrage
+    try:
+        await coordinator.async_config_entry_first_refresh()
+    except Exception as err:
+        _LOGGER.error("Erreur lors du premier refresh Storcube: %s", err)
+        raise ConfigEntryNotReady(f"Connexion impossible : {err}") from err
+
+    # 5. Stockage définitif AVANT de charger les capteurs
     hass.data[DOMAIN][entry.entry_id] = {
         "coordinator": coordinator,
     }
 
-    # 5. Enregistrement des plateformes (sensor.py, number.py...)
+    # 6. Chargement des plateformes (appelle sensor.py)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     
-    # 6. Enregistrement des services globaux
-    # On vérifie si les services sont déjà enregistrés pour éviter les doublons
-    await async_setup_services(hass)
-    
+    # Optionnel : Services (vérifie que services.py existe bien dans ton dossier)
+    try:
+        from .services import async_setup_services
+        await async_setup_services(hass)
+    except ImportError:
+        _LOGGER.debug("Fichier services.py non trouvé, ignore l'étape.")
+
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Déchargement d'une instance de batterie."""
-    # 1. Déchargement des plateformes (sensor, number...)
+    """Déchargement d'une instance."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     
     if unload_ok:
-        # 2. Récupération des données pour nettoyage
-        entry_data = hass.data[DOMAIN].pop(entry.entry_id)
-        coordinator = entry_data.get("coordinator")
+        hass.data[DOMAIN].pop(entry.entry_id)
         
-        # 3. Arrêt propre des tâches de fond (WebSocket)
-        if coordinator and hasattr(coordinator, "async_shutdown"):
-            await coordinator.async_shutdown()
-        
-        # 4. Nettoyage final
-        # Si c'était la dernière batterie, on retire les services et le domaine
+        # Si plus aucune batterie, on nettoie le domaine
         if not hass.data[DOMAIN]:
-            await async_unload_services(hass)
             hass.data.pop(DOMAIN)
 
     return unload_ok
-
-async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Rechargement de l'intégration."""
-    await hass.config_entries.async_reload(entry.entry_id)
