@@ -21,23 +21,6 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-) -> None:
-    """Configuration des capteurs Storcube."""
-    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-
-    # Ajout des entités avec les bons arguments (coordinator et entry)
-    async_add_entities([
-        StorcubeBatteryLevelSensor(coordinator, entry),
-        StorcubeBatteryPowerSensor(coordinator, entry),
-        StorcubeSolarPowerSensor(coordinator, entry, "1"),
-        StorcubeSolarPowerSensor(coordinator, entry, "2"),
-        StorcubeTemperatureSensor(coordinator, entry),
-    ])
-
 class StorcubeBaseSensor(CoordinatorEntity, SensorEntity):
     """Classe de base pour les capteurs Storcube."""
     _attr_has_entity_name = True
@@ -45,7 +28,7 @@ class StorcubeBaseSensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, entry):
         super().__init__(coordinator)
         self._entry = entry
-        self._device_id = str(entry.data["device_id"]).strip()
+        self._device_id = str(entry.data.get("device_id")).strip()
         
         self._attr_device_info = {
             "identifiers": {(DOMAIN, self._device_id)},
@@ -113,3 +96,21 @@ class StorcubeTemperatureSensor(StorcubeBaseSensor):
     @property
     def native_value(self):
         return self.coordinator.data.get("temp")
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Configuration des capteurs Storcube."""
+    # Récupération du coordinateur
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+
+    # On ajoute les entités une par une pour être sûr du mapping
+    async_add_entities([
+        StorcubeBatteryLevelSensor(coordinator, entry),
+        StorcubeBatteryPowerSensor(coordinator, entry),
+        StorcubeSolarPowerSensor(coordinator, entry, "1"),
+        StorcubeSolarPowerSensor(coordinator, entry, "2"),
+        StorcubeTemperatureSensor(coordinator, entry),
+    ])
