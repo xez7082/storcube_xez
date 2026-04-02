@@ -27,11 +27,9 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Configuration des capteurs Storcube."""
-    # On récupère le coordinateur depuis hass.data
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
 
-    # Création de la liste des entités
-    # Note : on passe (coordinator, entry) et non (config)
+    # Ajout des entités avec les bons arguments (coordinator et entry)
     async_add_entities([
         StorcubeBatteryLevelSensor(coordinator, entry),
         StorcubeBatteryPowerSensor(coordinator, entry),
@@ -47,7 +45,7 @@ class StorcubeBaseSensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, entry):
         super().__init__(coordinator)
         self._entry = entry
-        self._device_id = entry.data["device_id"]
+        self._device_id = str(entry.data["device_id"]).strip()
         
         self._attr_device_info = {
             "identifiers": {(DOMAIN, self._device_id)},
