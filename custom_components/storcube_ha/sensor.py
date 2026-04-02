@@ -26,13 +26,12 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Configuration des capteurs Storcube à partir d'une entrée de configuration."""
+    """Configuration des capteurs Storcube."""
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
 
-    # Liste des capteurs à créer
     sensors = [
         StorcubeBatteryLevelSensor(coordinator, entry),
-        StorcubeBatteryPowerSensor(coordinator, entry),  # Correction du nom ici
+        StorcubeBatteryPowerSensor(coordinator, entry),
         StorcubeSolarPowerSensor(coordinator, entry, "1"),
         StorcubeSolarPowerSensor(coordinator, entry, "2"),
         StorcubeTemperatureSensor(coordinator, entry),
@@ -70,11 +69,14 @@ class StorcubeBatteryLevelSensor(StorcubeBaseSensor):
 
     @property
     def native_value(self):
-        # Vérifiez que 'soc' est la bonne clé dans votre coordinator.py
-        return self.coordinator.data.get("soc")
+        # On tente de récupérer 'soc' ou 'batteryLevel'. Si rien, on met None pour éviter 'Inconnu'
+        val = self.coordinator.data.get("soc")
+        if val is None:
+            val = self.coordinator.data.get("batteryLevel")
+        return val
 
 class StorcubeBatteryPowerSensor(StorcubeBaseSensor):
-    """Capteur de puissance de charge/décharge (W)."""
+    """Capteur de puissance batterie (W)."""
     _attr_native_unit_of_measurement = UnitOfPower.WATT
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -86,11 +88,12 @@ class StorcubeBatteryPowerSensor(StorcubeBaseSensor):
 
     @property
     def native_value(self):
-        # Souvent 'power' ou 'chargingPower' dans l'API Storcube
-        return self.coordinator.data.get("power")
+        # On récupère la puissance, par défaut 0 si non disponible
+        val = self.coordinator.data.get("power")
+        return val if val is not None else 0
 
 class StorcubeSolarPowerSensor(StorcubeBaseSensor):
-    """Capteur de production solaire PV (W)."""
+    """Capteur de production solaire (W)."""
     _attr_native_unit_of_measurement = UnitOfPower.WATT
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -103,8 +106,9 @@ class StorcubeSolarPowerSensor(StorcubeBaseSensor):
 
     @property
     def native_value(self):
-        # Vérifiez les clés pv1 / pv2 dans votre flux de données
-        return self.coordinator.data.get(f"pv{self._pv_index}")
+        # On cherche pv1 ou pv2 dans les données
+        val = self.coordinator.data.get(f"pv{self._pv_index}")
+        return val if val is not None else 0
 
 class StorcubeTemperatureSensor(StorcubeBaseSensor):
     """Capteur de température (°C)."""
@@ -119,4 +123,8 @@ class StorcubeTemperatureSensor(StorcubeBaseSensor):
 
     @property
     def native_value(self):
-        return self.coordinator.data.get("temp")
+        # Test de plusieurs clés possibles pour la température
+        val = self.coordinator.data.get("temp")
+        if val is None:
+            val = self.coordinator.data.get("temperature")
+        return val
