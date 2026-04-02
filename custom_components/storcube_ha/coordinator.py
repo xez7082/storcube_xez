@@ -46,7 +46,6 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._auth_token: str | None = None
         self._device_id = str(entry.data[CONF_DEVICE_ID]).strip()
         
-        # Initialisation avec des valeurs par défaut pour éviter "Inconnu" au démarrage
         self.data = {
             "soc": 0,
             "power": 0,
@@ -83,99 +82,105 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             async with self.session.post(TOKEN_URL, json=payload, timeout=15) as resp:
                 if resp.status == 401:
                     raise ConfigEntryAuthFailed("Identifiants Storcube invalides")
-                
                 res = await resp.json()
                 if res.get("code") == 200:
                     self._auth_token = res["data"]["token"]
-                    _LOGGER.debug("Nouveau token Storcube généré avec succès")
-                else:
-                    _LOGGER.error("Échec récupération Token: %s", res.get("message"))
+                    _LOGGER.debug("Nouveau token Storcube généré")
         except Exception as err:
-            _LOGGER.error("Erreur réseau lors de l'authentification: %s", err)
+            _LOGGER.error("Erreur d'authentification: %s", err)
+
+    def _extract_values(self, source_data: dict[str, Any]):
+        """Extrait les valeurs en testant plusieurs clés possibles."""
+        # SOC / Batterie
+        self.data["soc"] = (
+            source_data.get("batteryLevel") or 
+            source_data.get("soc") or 
+            source_data.get("cap") or 
+            self.data["soc"]
+        )
+        # Puissance Totale (W)
+        self.data["power"] = (
+            source_data.get("currentPower") or 
+            source_data.get("power") or 
+            source_data.get("p") or 
+            0
+        )
+        # Solaire PV1
+        self.data["pv1"] = (
+            source_data.get("pvPower1") or 
+            source_data.get("pv1") or 
+            source_data.get("ppv1") or 
+            0
+        )
+        # Solaire PV2
+        self.data["pv2"] = (
+            source_data.get("pvPower2") or 
+            source_data.get("pv2") or 
+            source_data.get("ppv2") or 
+            0
+        )
+        # Température
+        self.data["temp"] = (
+            source_data.get("temperature") or 
+            source_data.get("temp") or 
+            source_data.get("t") or 
+            self.data["temp"]
+        )
+        self.data["is_online"] = source_data.get("online", True)
 
     async def _update_rest_data(self):
         """Récupère les données via l'API REST."""
-        if not self._auth_token:
-            return
-
-        headers = {
-            "Authorization": self._auth_token,
-            "appCode": self.entry.data.get(CONF_APP_CODE, "Storcube")
-        }
+        if not self._auth_token: return
+        headers = {"Authorization": self._auth_token, "appCode": self.entry.data.get(CONF_APP_CODE, "Storcube")}
         url = f"{OUTPUT_URL}{self._device_id}"
         
         try:
             async with self.session.get(url, headers=headers, timeout=10) as resp:
                 res = await resp.json()
-                _LOGGER.debug("REST API Response pour %s: %s", self._device_id, res)
-                
                 if res.get("code") == 200 and res.get("data"):
+                    # On cherche l'objet data. Parfois c'est une liste, parfois un dict.
                     raw = res["data"][0] if isinstance(res["data"], list) else res["data"]
-                    
-                    # Mapping ultra-robuste pour les sensors
-                    self.data["soc"] = raw.get("batteryLevel") or raw.get("soc") or self.data["soc"]
-                    self.data["temp"] = raw.get("temperature") or raw.get("temp") or self.data["temp"]
-                    self.data["is_online"] = raw.get("online", self.data["is_online"])
-                    
+                    _LOGGER.debug("Extraction REST pour %s: %s", self._device_id, raw)
+                    self._extract_values(raw)
                     self.async_set_updated_data(self.data)
         except Exception as err:
-            _LOGGER.debug("Erreur REST API (attente WebSocket/MQTT): %s", err)
+            _LOGGER.debug("REST API indisponible: %s", err)
 
     async def async_setup_listeners(self):
-        """Configure les écouteurs MQTT et WebSocket."""
-        # MQTT
+        """Abonnement MQTT et WebSocket."""
         @callback
         def _handle_mqtt_msg(msg):
             try:
                 payload = json.loads(msg.payload)
                 topic_type = msg.topic.split("/")[-1]
-                _LOGGER.debug("MQTT reçu [%s]: %s", topic_type, payload)
-                
-                if topic_type == "power":
-                    self.data["power"] = payload.get("value", 0)
-                elif topic_type == "solar":
-                    self.data["pv1"] = payload.get("pv1", 0)
-                    self.data["pv2"] = payload.get("pv2", 0)
-                
+                if topic_type == "all": # Certains envoient tout dans un seul topic
+                    self._extract_values(payload)
+                else:
+                    self.data[topic_type] = payload.get("value", 0)
                 self.async_set_updated_data(self.data)
-            except Exception as err:
-                _LOGGER.error("Erreur MQTT: %s", err)
+            except: pass
 
         try:
             await mqtt.async_subscribe(self.hass, f"storcube/{self._device_id}/#", _handle_mqtt_msg)
-        except Exception as err:
-            _LOGGER.warning("MQTT non disponible : %s", err)
-
-        # WebSocket
+        except: pass
         self.hass.loop.create_task(self._listen_websocket())
 
     async def _listen_websocket(self):
-        """Boucle WebSocket pour les données en temps réel."""
+        """Boucle WebSocket."""
         while True:
             if not self._auth_token:
-                await asyncio.sleep(5)
-                continue
-
+                await asyncio.sleep(5); continue
             try:
-                headers = {"Authorization": self._auth_token}
-                async with websockets.connect(WS_URI, extra_headers=headers) as ws:
+                async with websockets.connect(WS_URI, extra_headers={"Authorization": self._auth_token}) as ws:
                     _LOGGER.info("WebSocket Storcube connecté")
                     while True:
                         msg = await ws.recv()
                         payload = json.loads(msg)
-                        _LOGGER.debug("WS Message: %s", payload)
-                        
                         devices = payload.get("list", [])
                         for device in devices:
                             if str(device.get("equipId")) == self._device_id:
-                                # Mise à jour de toutes les valeurs possibles
-                                self.data["soc"] = device.get("batteryLevel") or self.data["soc"]
-                                self.data["power"] = device.get("currentPower") or 0
-                                self.data["pv1"] = device.get("pvPower1") or 0
-                                self.data["pv2"] = device.get("pvPower2") or 0
-                                self.data["is_online"] = device.get("online", True)
-                                
+                                self._extract_values(device)
                                 self.async_set_updated_data(self.data)
             except Exception as err:
-                _LOGGER.debug("Déconnexion WebSocket, nouvel essai dans 15s: %s", err)
+                _LOGGER.debug("Reconnexion WS dans 15s: %s", err)
                 await asyncio.sleep(15)
