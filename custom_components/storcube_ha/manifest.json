@@ -1,6 +1,6 @@
 {
-  "domain": "storcube_ha",
-  "name": "Storcube Battery Monitor",
+  "domain": "storcube",
+  "name": "Storcube",
   "version": "1.2.31",
   "documentation": "https://github.com/jon7119/storcube_Ha",
   "issue_tracker": "https://github.com/jon7119/storcube_Ha/issues",
