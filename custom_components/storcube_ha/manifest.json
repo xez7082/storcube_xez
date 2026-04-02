@@ -1,13 +1,12 @@
 {
   "domain": "storcube",
   "name": "Storcube",
-  "version": "1.2.31",
-  "documentation": "https://github.com/jon7119/storcube_Ha",
-  "issue_tracker": "https://github.com/jon7119/storcube_Ha/issues",
+  "version": "1.2.3",
+  "documentation": "https://github.com/xez7082/storcube_Ha",
+  "issue_tracker": "https://github.com/xez7082/storcube_Ha/issues",
   "dependencies": ["mqtt"],
-  "codeowners": ["@jon7119"],
-  "requirements": ["aiohttp>=3.9.0"],
-  "config_flow": true,
+  "codeowners": ["@xez7082"],
+  "requirements": ["aiohttp", "websockets"],
   "iot_class": "cloud_polling",
-  "homeassistant": "2025.1.0"
+  "homeassistant": "2024.1.0"
 }
