@@ -10,6 +10,7 @@ from typing import Any
 import aiohttp
 import websockets
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.components import mqtt
@@ -43,106 +44,133 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.entry = entry
         self.session = async_get_clientsession(hass)
         self._auth_token: str | None = None
+        self._device_id = entry.data[CONF_DEVICE_ID]
         
-        # Initialisation de la structure de données
+        # Structure de données plate pour que les sensors s'y retrouvent facilement
         self.data = {
-            "websocket": {},
-            "rest_api": {},
-            "firmware": {},
-            "raw_mqtt": {}
+            "soc": None,
+            "power": 0,
+            "pv1": 0,
+            "pv2": 0,
+            "temp": 0,
+            "is_online": False
         }
 
+    async def async_setup(self):
+        """Configuration initiale des écouteurs (appelé par __init__.py)."""
+        await self.async_setup_listeners()
+
     async def _async_update_data(self) -> dict[str, Any]:
-        """Méthode principale de mise à jour (appelée par le cycle Coordinator)."""
+        """Mise à jour périodique via REST API."""
         try:
-            # 1. Vérifier/Récupérer le Token
             if not self._auth_token:
                 await self.async_renew_token()
 
-            # 2. Récupérer les données REST (Scène/Output)
             await self._update_rest_data()
-
             return self.data
         except Exception as err:
-            raise UpdateFailed(f"Erreur lors de la mise à jour : {err}") from err
+            _LOGGER.error("Erreur lors de la mise à jour Storcube : %s", err)
+            raise UpdateFailed(f"Erreur de communication : {err}") from err
 
     async def async_renew_token(self):
         """Récupère un nouveau token d'accès."""
         payload = {
-            "appCode": self.entry.data[CONF_APP_CODE],
+            "appCode": self.entry.data.get(CONF_APP_CODE, "Storcube"),
             "loginName": self.entry.data[CONF_LOGIN_NAME],
             "password": self.entry.data[CONF_AUTH_PASSWORD]
         }
-        async with self.session.post(TOKEN_URL, json=payload) as resp:
-            if resp.status == 401:
-                raise ConfigEntryAuthFailed("Identifiants Storcube invalides")
-            res = await resp.json()
-            if res.get("code") == 200:
-                self._auth_token = res["data"]["token"]
-                _LOGGER.debug("Nouveau token Storcube généré")
-            else:
-                raise UpdateFailed(f"Erreur API Token: {res.get('message')}")
+        try:
+            async with self.session.post(TOKEN_URL, json=payload, timeout=15) as resp:
+                if resp.status == 401:
+                    raise ConfigEntryAuthFailed("Identifiants Storcube invalides")
+                
+                res = await resp.json()
+                if res.get("code") == 200:
+                    self._auth_token = res["data"]["token"]
+                    _LOGGER.debug("Nouveau token Storcube généré")
+                else:
+                    _LOGGER.error("Échec récupération Token: %s", res.get("message"))
+        except Exception as err:
+            _LOGGER.error("Erreur réseau lors de l'auth: %s", err)
 
     async def _update_rest_data(self):
-        """Récupère les données via l'API REST."""
+        """Récupère les données via l'API REST et met à jour self.data."""
+        if not self._auth_token:
+            return
+
         headers = {
             "Authorization": self._auth_token,
-            "appCode": self.entry.data[CONF_APP_CODE]
+            "appCode": self.entry.data.get(CONF_APP_CODE, "Storcube")
         }
-        url = f"{OUTPUT_URL}{self.entry.data[CONF_DEVICE_ID]}"
+        url = f"{OUTPUT_URL}{self._device_id}"
         
         try:
             async with self.session.get(url, headers=headers, timeout=10) as resp:
                 res = await resp.json()
                 if res.get("code") == 200 and res.get("data"):
-                    # On stocke les données par device_id
-                    device_data = res["data"][0] if isinstance(res["data"], list) else res["data"]
-                    self.data["rest_api"][self.entry.data[CONF_DEVICE_ID]] = device_data
+                    raw = res["data"][0] if isinstance(res["data"], list) else res["data"]
+                    
+                    # Mapping des données REST vers notre structure plate
+                    self.data["soc"] = raw.get("batteryLevel") or raw.get("soc")
+                    self.data["temp"] = raw.get("temperature") or raw.get("temp")
+                    self.async_set_updated_data(self.data)
         except Exception as err:
-            _LOGGER.error("Erreur REST API: %s", err)
+            _LOGGER.debug("REST API non disponible (normal si WebSocket actif): %s", err)
 
     async def async_setup_listeners(self):
-        """Configure les écouteurs asynchrones (MQTT et WebSocket)."""
+        """Configure les écouteurs MQTT et WebSocket."""
         
-        # 1. MQTT Natif Home Assistant
+        # 1. MQTT
         @callback
         def _handle_mqtt_msg(msg):
-            """Callback quand un message MQTT arrive."""
             try:
                 payload = json.loads(msg.payload)
+                # On détecte le type de donnée par le topic (ex: storcube/ID/power)
                 topic_type = msg.topic.split("/")[-1]
-                self.data["raw_mqtt"][topic_type] = payload.get("value")
+                
+                if topic_type == "power":
+                    self.data["power"] = payload.get("value", 0)
+                elif topic_type == "solar":
+                    self.data["pv1"] = payload.get("pv1", 0)
+                    self.data["pv2"] = payload.get("pv2", 0)
+                
                 self.async_set_updated_data(self.data)
             except Exception as err:
-                _LOGGER.error("Erreur lecture MQTT: %s", err)
+                _LOGGER.error("Erreur MQTT: %s", err)
 
-        # Abonnement dynamique via le module MQTT de HA
-        await mqtt.async_subscribe(self.hass, f"storcube/{self.entry.data[CONF_DEVICE_ID]}/#", _handle_mqtt_msg)
+        await mqtt.async_subscribe(self.hass, f"storcube/{self._device_id}/#", _handle_mqtt_msg)
 
-        # 2. Démarrer le WebSocket en tâche de fond
+        # 2. WebSocket (en tâche de fond)
         self.hass.loop.create_task(self._listen_websocket())
 
     async def _listen_websocket(self):
-        """Boucle de lecture WebSocket."""
+        """Boucle WebSocket pour les données en temps réel."""
         while True:
             if not self._auth_token:
                 await asyncio.sleep(5)
                 continue
 
             try:
+                # Ajout du token dans l'URL ou les headers selon l'API
                 headers = {"Authorization": self._auth_token}
                 async with websockets.connect(WS_URI, extra_headers=headers) as ws:
-                    _LOGGER.info("Connecté au WebSocket Storcube")
+                    _LOGGER.info("WebSocket Storcube connecté")
                     while True:
                         msg = await ws.recv()
                         payload = json.loads(msg)
-                        if "list" in payload:
-                            for device in payload["list"]:
-                                d_id = device.get("equipId")
-                                self.data["websocket"][d_id] = device
-                            
-                            # On force la mise à jour des entités HA
-                            self.async_set_updated_data(self.data)
+                        
+                        # Extraction des données selon le format Storcube
+                        # On cherche notre device dans la liste reçue
+                        devices = payload.get("list", [])
+                        for device in devices:
+                            if device.get("equipId") == self._device_id:
+                                self.data["soc"] = device.get("batteryLevel")
+                                self.data["power"] = device.get("currentPower")
+                                self.data["pv1"] = device.get("pvPower1")
+                                self.data["pv2"] = device.get("pvPower2")
+                                self.data["is_online"] = device.get("online", False)
+                                
+                                self.async_set_updated_data(self.data)
             except Exception as err:
-                _LOGGER.warning("Déconnexion WS (%s), reconnexion dans 10s", err)
-                await asyncio.sleep(10)
+                _LOGGER.debug("Reconnexion WebSocket dans 15s... (%s)", err)
+                await asyncio.sleep(15)
