@@ -44,11 +44,11 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.entry = entry
         self.session = async_get_clientsession(hass)
         self._auth_token: str | None = None
-        self._device_id = entry.data[CONF_DEVICE_ID]
+        self._device_id = str(entry.data[CONF_DEVICE_ID]).strip()
         
-        # Structure de données plate pour que les sensors s'y retrouvent facilement
+        # Initialisation avec des valeurs par défaut pour éviter "Inconnu" au démarrage
         self.data = {
-            "soc": None,
+            "soc": 0,
             "power": 0,
             "pv1": 0,
             "pv2": 0,
@@ -57,7 +57,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
     async def async_setup(self):
-        """Configuration initiale des écouteurs (appelé par __init__.py)."""
+        """Configuration initiale des écouteurs."""
         await self.async_setup_listeners()
 
     async def _async_update_data(self) -> dict[str, Any]:
@@ -87,14 +87,14 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 res = await resp.json()
                 if res.get("code") == 200:
                     self._auth_token = res["data"]["token"]
-                    _LOGGER.debug("Nouveau token Storcube généré")
+                    _LOGGER.debug("Nouveau token Storcube généré avec succès")
                 else:
                     _LOGGER.error("Échec récupération Token: %s", res.get("message"))
         except Exception as err:
-            _LOGGER.error("Erreur réseau lors de l'auth: %s", err)
+            _LOGGER.error("Erreur réseau lors de l'authentification: %s", err)
 
     async def _update_rest_data(self):
-        """Récupère les données via l'API REST et met à jour self.data."""
+        """Récupère les données via l'API REST."""
         if not self._auth_token:
             return
 
@@ -107,26 +107,29 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             async with self.session.get(url, headers=headers, timeout=10) as resp:
                 res = await resp.json()
+                _LOGGER.debug("REST API Response pour %s: %s", self._device_id, res)
+                
                 if res.get("code") == 200 and res.get("data"):
                     raw = res["data"][0] if isinstance(res["data"], list) else res["data"]
                     
-                    # Mapping des données REST vers notre structure plate
-                    self.data["soc"] = raw.get("batteryLevel") or raw.get("soc")
-                    self.data["temp"] = raw.get("temperature") or raw.get("temp")
+                    # Mapping ultra-robuste pour les sensors
+                    self.data["soc"] = raw.get("batteryLevel") or raw.get("soc") or self.data["soc"]
+                    self.data["temp"] = raw.get("temperature") or raw.get("temp") or self.data["temp"]
+                    self.data["is_online"] = raw.get("online", self.data["is_online"])
+                    
                     self.async_set_updated_data(self.data)
         except Exception as err:
-            _LOGGER.debug("REST API non disponible (normal si WebSocket actif): %s", err)
+            _LOGGER.debug("Erreur REST API (attente WebSocket/MQTT): %s", err)
 
     async def async_setup_listeners(self):
         """Configure les écouteurs MQTT et WebSocket."""
-        
-        # 1. MQTT
+        # MQTT
         @callback
         def _handle_mqtt_msg(msg):
             try:
                 payload = json.loads(msg.payload)
-                # On détecte le type de donnée par le topic (ex: storcube/ID/power)
                 topic_type = msg.topic.split("/")[-1]
+                _LOGGER.debug("MQTT reçu [%s]: %s", topic_type, payload)
                 
                 if topic_type == "power":
                     self.data["power"] = payload.get("value", 0)
@@ -138,9 +141,12 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             except Exception as err:
                 _LOGGER.error("Erreur MQTT: %s", err)
 
-        await mqtt.async_subscribe(self.hass, f"storcube/{self._device_id}/#", _handle_mqtt_msg)
+        try:
+            await mqtt.async_subscribe(self.hass, f"storcube/{self._device_id}/#", _handle_mqtt_msg)
+        except Exception as err:
+            _LOGGER.warning("MQTT non disponible : %s", err)
 
-        # 2. WebSocket (en tâche de fond)
+        # WebSocket
         self.hass.loop.create_task(self._listen_websocket())
 
     async def _listen_websocket(self):
@@ -151,26 +157,25 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 continue
 
             try:
-                # Ajout du token dans l'URL ou les headers selon l'API
                 headers = {"Authorization": self._auth_token}
                 async with websockets.connect(WS_URI, extra_headers=headers) as ws:
                     _LOGGER.info("WebSocket Storcube connecté")
                     while True:
                         msg = await ws.recv()
                         payload = json.loads(msg)
+                        _LOGGER.debug("WS Message: %s", payload)
                         
-                        # Extraction des données selon le format Storcube
-                        # On cherche notre device dans la liste reçue
                         devices = payload.get("list", [])
                         for device in devices:
-                            if device.get("equipId") == self._device_id:
-                                self.data["soc"] = device.get("batteryLevel")
-                                self.data["power"] = device.get("currentPower")
-                                self.data["pv1"] = device.get("pvPower1")
-                                self.data["pv2"] = device.get("pvPower2")
-                                self.data["is_online"] = device.get("online", False)
+                            if str(device.get("equipId")) == self._device_id:
+                                # Mise à jour de toutes les valeurs possibles
+                                self.data["soc"] = device.get("batteryLevel") or self.data["soc"]
+                                self.data["power"] = device.get("currentPower") or 0
+                                self.data["pv1"] = device.get("pvPower1") or 0
+                                self.data["pv2"] = device.get("pvPower2") or 0
+                                self.data["is_online"] = device.get("online", True)
                                 
                                 self.async_set_updated_data(self.data)
             except Exception as err:
-                _LOGGER.debug("Reconnexion WebSocket dans 15s... (%s)", err)
+                _LOGGER.debug("Déconnexion WebSocket, nouvel essai dans 15s: %s", err)
                 await asyncio.sleep(15)
