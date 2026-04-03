@@ -34,7 +34,7 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 login = user_input.get(CONF_LOGIN_NAME)
                 password = user_input.get(CONF_AUTH_PASSWORD)
 
-                # 🔥 FIX 1: validation stricte
+                # 🔥 AUTH CHECK
                 if not login or not password:
                     errors["base"] = "invalid_auth"
                     return self.async_show_form(
@@ -43,12 +43,12 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         errors=errors,
                     )
 
-                # 🔥 FIX 2: nettoyage device IDs
+                # 🔥 DEVICE IDS CLEANUP
                 raw_ids = user_input.get(CONF_DEVICE_ID, "")
                 device_ids = [
                     d.strip()
                     for d in raw_ids.split(",")
-                    if d and d.strip()
+                    if d.strip()
                 ]
 
                 if not device_ids:
@@ -59,7 +59,7 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         errors=errors,
                     )
 
-                # 🔥 FIX 3: unique_id stable + safe
+                # 🔥 UNIQUE ID SAFE
                 unique_id = f"{login}_{device_ids[0]}"
                 await self.async_set_unique_id(unique_id)
                 self._abort_if_unique_id_configured()
