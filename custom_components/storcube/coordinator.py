@@ -66,7 +66,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return default
 
     # -------------------------
-    # Main update loop
+    # Main loop
     # -------------------------
     async def _async_update_data(self) -> dict[str, Any]:
         try:
@@ -82,7 +82,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(f"Unexpected error: {err}") from err
 
     # -------------------------
-    # Auth
+    # AUTH
     # -------------------------
     async def _async_renew_token(self) -> None:
         payload = {
@@ -91,11 +91,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "password": self.entry.data[CONF_AUTH_PASSWORD],
         }
 
-        async with self.session.post(
-            TOKEN_URL,
-            json=payload,
-            timeout=10
-        ) as resp:
+        async with self.session.post(TOKEN_URL, json=payload, timeout=10) as resp:
             try:
                 res = await resp.json()
             except Exception:
@@ -107,7 +103,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 raise ConfigEntryAuthFailed("Invalid credentials")
 
             if resp.status == 200 and res.get("code") == 200:
-                token = res.get("data", {}).get("token")
+                token = (res.get("data") or {}).get("token")
                 if not token:
                     raise UpdateFailed("Token missing in response")
 
@@ -117,7 +113,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(f"Auth failed: {res}")
 
     # -------------------------
-    # Data extraction
+    # DATA PARSING
     # -------------------------
     def _extract_values(self, raw_data: dict[str, Any]) -> None:
         self.data["extra"] = raw_data
@@ -147,7 +143,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.data["is_online"] = str(online) == "1"
 
     # -------------------------
-    # API CALL (FIX IMPORTANT)
+    # API CALL (FIX ROBUSTE)
     # -------------------------
     async def _async_update_rest_data(self) -> None:
         if not self._auth_token:
@@ -158,11 +154,13 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "Content-Type": "application/json",
         }
 
-        # 🔥 FIX IMPORTANT : device en PARAMÈTRE et NON dans URL
-        url = DETAIL_URL
+        # 🔥 IMPORTANT : on garde flexible (API chinoise variable)
         params = {
-            "equipId": self._device_id
+            # 👉 fallback logique (si equipId ne marche pas, changer ici)
+            "deviceId": self._device_id,
         }
+
+        url = DETAIL_URL
 
         _LOGGER.debug("REQUEST URL: %s", url)
         _LOGGER.debug("REQUEST PARAMS: %s", params)
@@ -172,7 +170,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             url,
             headers=headers,
             params=params,
-            timeout=15
+            timeout=15,
         ) as resp:
 
             try:
@@ -189,13 +187,19 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if resp.status == 200 and res.get("code") == 200:
                 data_block = res.get("data")
 
+                # 🔥 FIX IMPORTANT : gérer None / [] / {}
                 if not data_block:
+                    _LOGGER.warning(
+                        "Empty data received for device_id=%s response=%s",
+                        self._device_id,
+                        res,
+                    )
                     raise UpdateFailed(
                         f"Empty data field (device_id={self._device_id})"
                     )
 
                 if isinstance(data_block, list):
-                    if not data_block:
+                    if len(data_block) == 0:
                         raise UpdateFailed("Empty device list")
                     data_block = data_block[0]
 
