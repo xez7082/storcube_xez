@@ -6,7 +6,7 @@ from typing import Final
 # =========================================================
 DOMAIN: Final = "storcube"
 NAME: Final = "Storcube"
-VERSION: Final = "1.2.3"
+VERSION: Final = "1.2.4"  # 🔥 bump version
 MANUFACTURER: Final = "Storcube"
 DEVELOPER: Final = "xez7082"
 
@@ -22,7 +22,7 @@ CONF_AUTH_PASSWORD: Final = "password"
 
 CONF_DEBUG: Final = "debug"
 
-# MQTT (AJOUTÉ PROPREMENT)
+# 🔥 MQTT CONFIG (EXTERNE)
 CONF_MQTT_HOST: Final = "mqtt_host"
 CONF_MQTT_PORT: Final = "mqtt_port"
 CONF_MQTT_USER: Final = "mqtt_user"
@@ -33,8 +33,10 @@ CONF_MQTT_TOPIC: Final = "mqtt_topic"
 # DEFAULTS
 # =========================================================
 DEFAULT_APP_CODE: Final = "Storcube"
+
+DEFAULT_MQTT_HOST: Final = "baterway.com"   # 🔥 important
 DEFAULT_MQTT_PORT: Final = 1883
-DEFAULT_MQTT_TOPIC: Final = "storcube/#"
+DEFAULT_MQTT_TOPIC: Final = "storcube/{device_id}/#"
 
 # =========================================================
 # API (REST fallback only)
@@ -49,16 +51,21 @@ SET_POWER_URL: Final = f"{BASE_URL}/api/slb/equip/set/power"
 SET_THRESHOLD_URL: Final = f"{BASE_URL}/api/scene/threshold/set"
 
 # =========================================================
-# MQTT (DYNAMIC - IMPORTANT FIX)
+# MQTT TOPICS (PAYLOAD KEYS)
 # =========================================================
 MQTT_DISCOVERY_PREFIX: Final = "homeassistant"
 
-# topics dynamiques (UTILISÉS DANS CODE)
 MQTT_STATE_TOPIC: Final = "state"
 MQTT_STATUS_TOPIC: Final = "status"
 MQTT_POWER_TOPIC: Final = "power"
 MQTT_SOLAR_TOPIC: Final = "solar"
 MQTT_OUTPUT_TOPIC: Final = "outputPower"
+
+# 🔥 mapping payload → HA (évite les erreurs)
+PAYLOAD_KEY_SOC: Final = "soc"
+PAYLOAD_KEY_POWER: Final = "outputPower"
+PAYLOAD_KEY_PV: Final = "pvPower"
+PAYLOAD_KEY_ONLINE: Final = "online"
 
 # =========================================================
 # WEBSOCKET
