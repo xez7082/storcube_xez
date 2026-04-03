@@ -16,7 +16,6 @@ DEVELOPER: Final = "xez7082"
 CONF_DEVICE_ID: Final = "device_id"
 CONF_DEVICE_IDS: Final = "device_ids"
 
-# ⚠️ IMPORTANT : doit matcher EXACT API payload
 CONF_APP_CODE: Final = "appCode"
 CONF_LOGIN_NAME: Final = "loginName"
 CONF_AUTH_PASSWORD: Final = "password"
@@ -41,19 +40,25 @@ SET_POWER_URL: Final = f"{BASE_URL}/api/slb/equip/set/power"
 SET_THRESHOLD_URL: Final = f"{BASE_URL}/api/scene/threshold/set"
 
 # -------------------------
-# MQTT (IMPORTANT ADDITION)
+# MQTT CONFIG (MAIN CHANNEL)
 # -------------------------
 MQTT_HOST: Final = "baterway.com"
 MQTT_PORT: Final = 1883
 
-MQTT_TOPIC_BASE: Final = "storcube/{device_id}"
+MQTT_BASE_TOPIC: Final = "storcube/{device_id}"
+
+# data topics
+MQTT_TOPIC_STATE: Final = "state"
 MQTT_TOPIC_STATUS: Final = "status"
 MQTT_TOPIC_POWER: Final = "power"
 MQTT_TOPIC_SOLAR: Final = "solar"
 MQTT_TOPIC_OUTPUT_POWER: Final = "outputPower"
 
+# discovery prefix HA
+MQTT_DISCOVERY_PREFIX: Final = "homeassistant"
+
 # -------------------------
-# WEBSOCKET (DISABLED / NOT RELIABLE)
+# WEBSOCKET (NOT USED)
 # -------------------------
 WS_URI: Final = "ws://baterway.com:9501/equip/info/"
 
