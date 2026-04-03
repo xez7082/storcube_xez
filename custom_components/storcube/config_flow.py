@@ -26,26 +26,25 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 2
 
     async def async_step_user(self, user_input=None):
-        """Handle the initial step."""
+        """Initial step."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
             try:
-                raw_ids = user_input[CONF_DEVICE_ID]
-                device_ids = [
-                    d.strip() for d in raw_ids.split(",") if d.strip()
-                ]
+                raw_ids = user_input.get(CONF_DEVICE_ID, "")
+                device_ids = [d.strip() for d in raw_ids.split(",") if d.strip()]
 
                 if not device_ids:
                     errors["base"] = "no_device"
                 else:
+                    # 🔥 FIX: unique_id plus stable et unique
                     await self.async_set_unique_id(
-                        user_input[CONF_LOGIN_NAME]
+                        f"{user_input[CONF_LOGIN_NAME]}_{device_ids[0]}"
                     )
                     self._abort_if_unique_id_configured()
 
                     return self.async_create_entry(
-                        title=f"StorCube ({len(device_ids)} devices)",
+                        title=f"StorCube ({len(device_ids)} device{'s' if len(device_ids) > 1 else ''})",
                         data={
                             CONF_LOGIN_NAME: user_input[CONF_LOGIN_NAME],
                             CONF_AUTH_PASSWORD: user_input[CONF_AUTH_PASSWORD],
@@ -65,7 +64,7 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 {
                     vol.Required(CONF_LOGIN_NAME): str,
                     vol.Required(CONF_AUTH_PASSWORD): str,
-                    vol.Required(CONF_DEVICE_ID): str,
+                    vol.Required(CONF_DEVICE_ID): str,  # "id1,id2"
                     vol.Optional(CONF_DEBUG, default=False): bool,
                 }
             ),
@@ -75,7 +74,7 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(entry):
-        """Get the options flow."""
+        """Options flow."""
         return StorcubeOptionsFlow(entry)
 
 
@@ -101,6 +100,12 @@ class StorcubeOptionsFlow(config_entries.OptionsFlow):
                             self.entry.data.get(CONF_DEBUG, False),
                         ),
                     ): bool,
+
+                    # 🔥 FIX: allow device update (important)
+                    vol.Optional(
+                        CONF_DEVICE_ID,
+                        default=",".join(self.entry.data.get(CONF_DEVICE_IDS, [])),
+                    ): str,
                 }
             ),
         )
