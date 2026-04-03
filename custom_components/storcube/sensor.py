@@ -27,17 +27,16 @@ class StorcubeBaseSensor(CoordinatorEntity, SensorEntity):
     """Base sensor StorCube."""
 
     _attr_has_entity_name = True
+    _attr_native_value = None  # 🔥 important pour éviter unknown au début
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
 
         self._entry = entry
 
-        # 🔥 FIX IMPORTANT : device_id correct
         device_ids = entry.data.get(CONF_DEVICE_IDS, [])
         self._device_id = str(device_ids[0]) if device_ids else "unknown"
 
-        # Device grouping HA
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self._device_id)},
             name=f"StorCube {self._device_id}",
@@ -45,61 +44,61 @@ class StorcubeBaseSensor(CoordinatorEntity, SensorEntity):
             model="S1000",
         )
 
-    def _safe(self, key: str, default: Any = None) -> Any:
+    def _safe(self, key: str, default: Any = 0.0) -> Any:
         """Safe access coordinator data."""
-        return (self.coordinator.data or {}).get(key, default)
+        if not self.coordinator or not self.coordinator.data:
+            return default
+        return self.coordinator.data.get(key, default)
 
 
 # =========================================================
 # BATTERY LEVEL
 # =========================================================
 class StorcubeBatteryLevelSensor(StorcubeBaseSensor):
-    """Battery SOC sensor."""
-
     _attr_native_unit_of_measurement = PERCENTAGE
     _attr_device_class = SensorDeviceClass.BATTERY
     _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, coordinator, entry):
         super().__init__(coordinator, entry)
-
         self._attr_name = "Battery Level"
-
-        # 🔥 FIX unique_id stable
         self._attr_unique_id = f"storcube_{self._device_id}_battery_level"
 
     @property
     def native_value(self) -> float:
-        return float(self._safe("soc", 0.0) or 0.0)
+        value = self._safe("soc", 0.0)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
 
 
 # =========================================================
-# POWER OUTPUT
+# OUTPUT POWER
 # =========================================================
 class StorcubeBatteryPowerSensor(StorcubeBaseSensor):
-    """AC output power."""
-
     _attr_native_unit_of_measurement = UnitOfPower.WATT
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, coordinator, entry):
         super().__init__(coordinator, entry)
-
         self._attr_name = "Output Power"
         self._attr_unique_id = f"storcube_{self._device_id}_battery_power"
 
     @property
     def native_value(self) -> float:
-        return float(self._safe("power", 0.0) or 0.0)
+        value = self._safe("power", 0.0)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
 
 
 # =========================================================
 # SOLAR PV
 # =========================================================
 class StorcubeSolarPowerSensor(StorcubeBaseSensor):
-    """Solar PV sensor."""
-
     _attr_native_unit_of_measurement = UnitOfPower.WATT
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -108,34 +107,38 @@ class StorcubeSolarPowerSensor(StorcubeBaseSensor):
         super().__init__(coordinator, entry)
 
         self._pv_index = pv_index
-
         self._attr_name = f"Solar PV{pv_index}"
         self._attr_unique_id = f"storcube_{self._device_id}_solar_pv{pv_index}"
 
     @property
     def native_value(self) -> float:
-        return float(self._safe(f"pv{self._pv_index}", 0.0) or 0.0)
+        value = self._safe(f"pv{self._pv_index}", 0.0)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
 
 
 # =========================================================
 # TEMPERATURE
 # =========================================================
 class StorcubeTemperatureSensor(StorcubeBaseSensor):
-    """Temperature sensor."""
-
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, coordinator, entry):
         super().__init__(coordinator, entry)
-
         self._attr_name = "Temperature"
         self._attr_unique_id = f"storcube_{self._device_id}_temperature"
 
     @property
     def native_value(self) -> float:
-        return float(self._safe("temp", 0.0) or 0.0)
+        value = self._safe("temp", 0.0)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
 
 
 # =========================================================
@@ -153,11 +156,11 @@ async def async_setup_entry(
         _LOGGER.error("StorCube coordinator missing for %s", entry.entry_id)
         return
 
-    sensors: list[SensorEntity] = [
+    entities: list[SensorEntity] = [
         StorcubeBatteryLevelSensor(coordinator, entry),
         StorcubeBatteryPowerSensor(coordinator, entry),
         StorcubeSolarPowerSensor(coordinator, entry, 1),
         StorcubeTemperatureSensor(coordinator, entry),
     ]
 
-    async_add_entities(sensors)
+    async_add_entities(entities)
