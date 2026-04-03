@@ -28,7 +28,6 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Handle Storcube API data updates."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         super().__init__(
@@ -74,7 +73,6 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         except ConfigEntryAuthFailed:
             raise
-
         except Exception as err:
             raise UpdateFailed(f"Unexpected error: {err}") from err
 
@@ -88,7 +86,10 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         async with self.session.post(
             TOKEN_URL, json=payload, timeout=10
         ) as resp:
-            res = await resp.json()
+            try:
+                res = await resp.json()
+            except Exception:
+                raise UpdateFailed("Invalid JSON from token endpoint")
 
             _LOGGER.debug("TOKEN RESPONSE: %s", res)
 
@@ -96,15 +97,16 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 raise ConfigEntryAuthFailed("Invalid credentials")
 
             if resp.status == 200 and res.get("code") == 200:
-                token = res["data"]["token"]
+                token = res.get("data", {}).get("token")
+                if not token:
+                    raise UpdateFailed("Token missing in response")
+
                 self._auth_token = str(token).strip()
                 return
 
             raise UpdateFailed(f"Auth failed: {res}")
 
     def _extract_values(self, raw_data: dict[str, Any]) -> None:
-        _LOGGER.debug("Raw data (%s): %s", self._device_id, raw_data)
-
         self.data["extra"] = raw_data
 
         self.data["soc"] = self._safe_float(
@@ -135,10 +137,9 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not self._auth_token:
             raise UpdateFailed("No auth token")
 
-        # 🔥 FIX IMPORTANT : API attend souvent token direct ou Bearer
+        # 🔥 FIX FINAL : API Storcube = token BRUT (PAS Bearer)
         headers = {
-            "Authorization": f"Bearer {self._auth_token}",
-            "appCode": self.entry.data.get(CONF_APP_CODE, "Storcube"),
+            "Authorization": self._auth_token,
             "Content-Type": "application/json",
         }
 
@@ -150,24 +151,25 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         async with self.session.get(
             url, headers=headers, timeout=15
         ) as resp:
-            res = await resp.json()
+            try:
+                res = await resp.json()
+            except Exception:
+                raise UpdateFailed("Invalid JSON in API response")
 
             _LOGGER.debug("API RESPONSE (%s): %s", self._device_id, res)
 
-            if resp.status == 401:
+            if resp.status == 401 or res.get("code") == 401:
                 self._auth_token = None
-                raise UpdateFailed("Token expired")
+                raise ConfigEntryAuthFailed("Auth failed / token expired")
 
             if resp.status == 200 and res.get("code") == 200:
                 data_block = res.get("data")
 
-                if data_block is None:
-                    raise UpdateFailed("No data field in response")
+                if not data_block:
+                    raise UpdateFailed("Empty data field")
 
                 if isinstance(data_block, list):
-                    if not data_block:
-                        raise UpdateFailed("Empty device list")
-                    data_block = data_block[0]
+                    data_block = data_block[0] if data_block else None
 
                 if isinstance(data_block, dict):
                     self._extract_values(data_block)
