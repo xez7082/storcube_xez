@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import logging
+import json
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.components import mqtt
 
-from .const import DOMAIN
+from .const import DOMAIN, CONF_DEVICE_IDS
 from .coordinator import StorCubeDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -31,15 +33,43 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # 🔥 CREATE COORDINATOR
         coordinator = StorCubeDataUpdateCoordinator(hass, entry)
 
-        # store in hass.data
         hass.data[DOMAIN][entry.entry_id] = {
             "coordinator": coordinator,
         }
 
-        # 🔥 FIRST REFRESH (safe)
+        # 🔥 FIRST REFRESH
         await coordinator.async_config_entry_first_refresh()
 
-        # forward platforms (SENSOR)
+        # =========================================================
+        # 🔥 MQTT SUBSCRIPTION (FIX PRINCIPAL)
+        # =========================================================
+        device_ids = entry.data.get(CONF_DEVICE_IDS, [])
+
+        if not device_ids:
+            raise ConfigEntryNotReady("No device IDs configured")
+
+        device_id = device_ids[0]
+
+        topic = f"storcube/{device_id}/#"
+
+        _LOGGER.warning("Subscribing to MQTT topic: %s", topic)
+
+        async def message_received(msg):
+            try:
+                payload = json.loads(msg.payload)
+
+                _LOGGER.debug("MQTT RECEIVED: %s", payload)
+
+                coordinator.update_from_ws(payload)
+
+            except Exception as err:
+                _LOGGER.error("MQTT parse error: %s", err)
+
+        await mqtt.async_subscribe(hass, topic, message_received)
+
+        # =========================================================
+        # PLATFORMS
+        # =========================================================
         await hass.config_entries.async_forward_entry_setups(
             entry,
             PLATFORMS,
@@ -53,7 +83,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         raise ConfigEntryNotReady(f"Storcube setup failed: {err}") from err
 
     # =========================================================
-    # OPTIONAL SERVICES
+    # SERVICES (OPTIONAL)
     # =========================================================
     try:
         from .services import async_setup_services
@@ -89,7 +119,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if entry_data:
                 coordinator = entry_data.get("coordinator")
 
-                # 🔥 SAFE WS TASK STOP (if exists)
+                # 🔥 STOP WS TASK IF EXISTS
                 ws_task = getattr(coordinator, "_ws_task", None)
 
                 if ws_task:
@@ -100,7 +130,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
                 domain_data.pop(entry.entry_id, None)
 
-        # cleanup domain if empty
         if not domain_data:
             hass.data.pop(DOMAIN, None)
 
@@ -122,5 +151,4 @@ async def async_migrate_entry(
         config_entry.version,
     )
 
-    # No migration yet
     return True
