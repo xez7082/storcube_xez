@@ -1,37 +1,63 @@
 from __future__ import annotations
 
+import logging
 import voluptuous as vol
+
 from homeassistant import config_entries
 from homeassistant.core import callback
 
-from .const import *
+from .const import (
+    DOMAIN,
+    CONF_DEVICE_ID,
+    CONF_DEVICE_IDS,
+    CONF_LOGIN_NAME,
+    CONF_AUTH_PASSWORD,
+    CONF_APP_CODE,
+    CONF_DEBUG,
+    DEFAULT_APP_CODE,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
 
 class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+    """Handle a config flow for Storcube."""
+
     VERSION = 2
 
     async def async_step_user(self, user_input=None):
-        errors = {}
+        """Handle the initial step."""
+        errors: dict[str, str] = {}
 
         if user_input is not None:
-            raw_ids = user_input[CONF_DEVICE_ID]
-            device_ids = [d.strip() for d in raw_ids.split(",") if d.strip()]
+            try:
+                raw_ids = user_input[CONF_DEVICE_ID]
+                device_ids = [
+                    d.strip() for d in raw_ids.split(",") if d.strip()
+                ]
 
-            if not device_ids:
-                errors["base"] = "no_device"
-            else:
-                await self.async_set_unique_id(user_input[CONF_LOGIN_NAME])
-                self._abort_if_unique_id_configured()
+                if not device_ids:
+                    errors["base"] = "no_device"
+                else:
+                    await self.async_set_unique_id(
+                        user_input[CONF_LOGIN_NAME]
+                    )
+                    self._abort_if_unique_id_configured()
 
-                return self.async_create_entry(
-                    title=f"StorCube ({len(device_ids)} devices)",
-                    data={
-                        CONF_LOGIN_NAME: user_input[CONF_LOGIN_NAME],
-                        CONF_AUTH_PASSWORD: user_input[CONF_AUTH_PASSWORD],
-                        CONF_DEVICE_IDS: device_ids,
-                        CONF_APP_CODE: DEFAULT_APP_CODE,
-                        CONF_DEBUG: user_input.get(CONF_DEBUG, False),
-                    },
-                )
+                    return self.async_create_entry(
+                        title=f"StorCube ({len(device_ids)} devices)",
+                        data={
+                            CONF_LOGIN_NAME: user_input[CONF_LOGIN_NAME],
+                            CONF_AUTH_PASSWORD: user_input[CONF_AUTH_PASSWORD],
+                            CONF_DEVICE_IDS: device_ids,
+                            CONF_APP_CODE: DEFAULT_APP_CODE,
+                            CONF_DEBUG: user_input.get(CONF_DEBUG, False),
+                        },
+                    )
+
+            except Exception as err:
+                _LOGGER.exception("Config flow error: %s", err)
+                errors["base"] = "unknown"
 
         return self.async_show_form(
             step_id="user",
@@ -46,16 +72,21 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    @staticmethod
     @callback
-    def async_get_options_flow(self, entry):
+    def async_get_options_flow(entry):
+        """Get the options flow."""
         return StorcubeOptionsFlow(entry)
 
 
 class StorcubeOptionsFlow(config_entries.OptionsFlow):
-    def __init__(self, entry):
+    """Handle options."""
+
+    def __init__(self, entry: config_entries.ConfigEntry):
         self.entry = entry
 
     async def async_step_init(self, user_input=None):
+        """Manage options."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
@@ -65,7 +96,10 @@ class StorcubeOptionsFlow(config_entries.OptionsFlow):
                 {
                     vol.Optional(
                         CONF_DEBUG,
-                        default=self.entry.data.get(CONF_DEBUG, False),
+                        default=self.entry.options.get(
+                            CONF_DEBUG,
+                            self.entry.data.get(CONF_DEBUG, False),
+                        ),
                     ): bool,
                 }
             ),
