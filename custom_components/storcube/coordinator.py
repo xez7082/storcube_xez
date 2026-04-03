@@ -15,7 +15,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 
 from .const import (
     DOMAIN,
-    CONF_DEVICE_ID,
+    CONF_DEVICE_IDS,
     CONF_APP_CODE,
     CONF_LOGIN_NAME,
     CONF_AUTH_PASSWORD,
@@ -41,7 +41,13 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.entry = entry
         self.session = async_get_clientsession(hass)
         self._auth_token: str | None = None
-        self._device_id = str(entry.data[CONF_DEVICE_ID]).strip()
+
+        # ✅ FIX CRITIQUE : multi-device safe
+        device_ids = entry.data.get(CONF_DEVICE_IDS, [])
+        if not device_ids:
+            raise ValueError("No device IDs configured")
+
+        self._device_id = str(device_ids[0]).strip()
 
         self.data: dict[str, Any] = {
             "soc": 0.0,
@@ -52,7 +58,6 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
     def _safe_float(self, value: Any, default: float = 0.0) -> float:
-        """Convert safely to float."""
         try:
             if value in (None, ""):
                 return default
@@ -61,13 +66,11 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return default
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Fetch data from API."""
         try:
             if not self._auth_token:
                 await self._async_renew_token()
 
             await self._async_update_rest_data()
-
             return dict(self.data)
 
         except ConfigEntryAuthFailed:
@@ -77,7 +80,6 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(f"Unexpected error: {err}") from err
 
     async def _async_renew_token(self) -> None:
-        """Authenticate and get token."""
         payload = {
             "appCode": self.entry.data.get(CONF_APP_CODE, "Storcube"),
             "loginName": self.entry.data[CONF_LOGIN_NAME],
@@ -106,7 +108,6 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(f"Auth error: {err}") from err
 
     def _extract_values(self, raw_data: dict[str, Any]) -> None:
-        """Extract values from API response."""
         _LOGGER.debug("Raw data (%s): %s", self._device_id, raw_data)
 
         self.data["extra"] = raw_data
@@ -136,7 +137,6 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.data["is_online"] = str(online) == "1"
 
     async def _async_update_rest_data(self) -> None:
-        """Fetch device data."""
         if not self._auth_token:
             raise UpdateFailed("No auth token")
 
