@@ -17,6 +17,9 @@ _LOGGER = logging.getLogger(__name__)
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 
 
+# =========================================================
+# SETUP ENTRY
+# =========================================================
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Storcube from a config entry."""
 
@@ -25,17 +28,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
 
     try:
+        # 🔥 CREATE COORDINATOR
         coordinator = StorCubeDataUpdateCoordinator(hass, entry)
 
+        # store in hass.data
         hass.data[DOMAIN][entry.entry_id] = {
             "coordinator": coordinator,
         }
 
-        # IMPORTANT: first refresh MUST NOT block forever (WS starts inside coordinator)
+        # 🔥 FIRST REFRESH (safe)
         await coordinator.async_config_entry_first_refresh()
 
-        # Forward platforms
-        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        # forward platforms (SENSOR)
+        await hass.config_entries.async_forward_entry_setups(
+            entry,
+            PLATFORMS,
+        )
 
     except ConfigEntryNotReady:
         raise
@@ -44,57 +52,75 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.exception("Unable to setup Storcube integration")
         raise ConfigEntryNotReady(f"Storcube setup failed: {err}") from err
 
-    # Optional services (safe import)
+    # =========================================================
+    # OPTIONAL SERVICES
+    # =========================================================
     try:
         from .services import async_setup_services
+
         await async_setup_services(hass)
+
     except ImportError:
-        _LOGGER.debug("No services module found (skipping)")
+        _LOGGER.debug("No services module found (skipping services)")
+
     except Exception as err:
         _LOGGER.exception("Error while setting up services: %s", err)
 
     return True
 
 
+# =========================================================
+# UNLOAD ENTRY
+# =========================================================
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload Storcube config entry."""
 
-    # unload platforms first
     unload_ok = await hass.config_entries.async_unload_platforms(
-        entry, PLATFORMS
+        entry,
+        PLATFORMS,
     )
 
     if unload_ok:
         domain_data = hass.data.get(DOMAIN)
 
         if domain_data:
-            coordinator = domain_data.get(entry.entry_id, {}).get("coordinator")
+            entry_data = domain_data.get(entry.entry_id)
 
-            # 🔥 CLEAN STOP WS TASK
-            if coordinator and hasattr(coordinator, "_ws_task"):
-                task = coordinator._ws_task
-                if task:
-                    task.cancel()
+            if entry_data:
+                coordinator = entry_data.get("coordinator")
 
-            domain_data.pop(entry.entry_id, None)
+                # 🔥 SAFE WS TASK STOP (if exists)
+                ws_task = getattr(coordinator, "_ws_task", None)
 
+                if ws_task:
+                    try:
+                        ws_task.cancel()
+                    except Exception:
+                        pass
+
+                domain_data.pop(entry.entry_id, None)
+
+        # cleanup domain if empty
         if not domain_data:
             hass.data.pop(DOMAIN, None)
 
     return unload_ok
 
 
+# =========================================================
+# MIGRATION HANDLER
+# =========================================================
 async def async_migrate_entry(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
 ) -> bool:
-    """Handle config entry migrations (fix 'Migration handler not found')."""
+    """Handle config entry migrations."""
 
     _LOGGER.debug(
-        "Migrating Storcube config entry %s (version %s)",
+        "Migrating Storcube entry %s from version %s",
         config_entry.entry_id,
         config_entry.version,
     )
 
-    # No schema changes yet
+    # No migration yet
     return True
