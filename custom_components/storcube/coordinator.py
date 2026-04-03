@@ -18,14 +18,14 @@ from .const import (
     CONF_LOGIN_NAME,
     CONF_AUTH_PASSWORD,
     TOKEN_URL,
-    OUTPUT_URL,
+    DETAIL_URL,  # On utilise DETAIL_URL au lieu de OUTPUT_URL
     SCAN_INTERVAL_SECONDS,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
 class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Gère la récupération des données via REST uniquement (Version Stable)."""
+    """Gère la récupération des données réelles via l'API Detail."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         super().__init__(
@@ -39,8 +39,6 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._auth_token: str | None = None
         self._device_id = str(entry.data[CONF_DEVICE_ID]).strip()
         
-        # Initialisation du dictionnaire de données
-        # IMPORTANT : Ces clés doivent correspondre à ce que sensor.py appelle
         self.data = {
             "soc": 0.0,
             "power": 0.0,
@@ -59,16 +57,12 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return default
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Méthode principale appelée par Home Assistant selon SCAN_INTERVAL."""
+        """Méthode principale de mise à jour."""
         try:
-            # 1. Vérifier/Renouveler le token si nécessaire
             if not self._auth_token:
                 await self.async_renew_token()
             
-            # 2. Récupérer les données
             await self._update_rest_data()
-            
-            # On retourne une copie pour déclencher la mise à jour des entités
             return dict(self.data)
             
         except ConfigEntryAuthFailed:
@@ -78,7 +72,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(f"Erreur de communication : {err}")
 
     async def async_renew_token(self):
-        """Authentification auprès de l'API Baterway."""
+        """Authentification."""
         payload = {
             "appCode": self.entry.data.get(CONF_APP_CODE, "Storcube"),
             "loginName": self.entry.data[CONF_LOGIN_NAME],
@@ -88,46 +82,41 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             async with self.session.post(TOKEN_URL, json=payload, timeout=10) as resp:
                 if resp.status == 401:
-                    raise ConfigEntryAuthFailed("Identifiants Storcube invalides")
+                    raise ConfigEntryAuthFailed("Identifiants incorrects")
                 
                 res = await resp.json()
                 if res.get("code") == 200 and "data" in res:
                     self._auth_token = res["data"]["token"]
-                    _LOGGER.info("Storcube : Token rafraîchi avec succès")
                 else:
-                    msg = res.get("msg", "Erreur inconnue")
-                    _LOGGER.error("Échec d'authentification : %s", msg)
-                    raise UpdateFailed(f"Auth fail: {msg}")
+                    raise UpdateFailed(f"Auth fail: {res.get('msg')}")
         except asyncio.TimeoutError:
-            raise UpdateFailed("Délai d'attente dépassé lors de l'authentification")
+            raise UpdateFailed("Timeout auth")
 
     def _extract_values(self, raw_data: dict[str, Any]):
-        """Mapping des clés API vers les variables Home Assistant."""
+        """Mapping des données REELLES de l'API Detail."""
         
-        _LOGGER.debug("Données brutes reçues : %s", raw_data)
-        
-        # Stockage brut pour diagnostic
+        _LOGGER.debug("Extraction des données réelles pour %s : %s", self._device_id, raw_data)
         self.data["extra"] = raw_data
 
-        # 1. SOC (Batterie) -> Utilise 'reserved' (70%)
-        # On essaie 'reserved', sinon 'soc', sinon on garde l'ancienne valeur
-        soc_val = raw_data.get("reserved") if raw_data.get("reserved") is not None else raw_data.get("soc")
+        # Sur l'API Detail, les clés peuvent être différentes. 
+        # On garde 'reserved' et 'soc' en secours, mais on ajoute les clés temps réel probables
+        soc_val = raw_data.get("soc") or raw_data.get("reserved") or raw_data.get("batteryLevel")
         self.data["soc"] = self._safe_float(soc_val, self.data["soc"])
 
-        # 2. Puissance Sortie -> Utilise 'outputPower' (150W)
-        out_val = raw_data.get("outputPower") if raw_data.get("outputPower") is not None else raw_data.get("invPower")
+        # Puissance de sortie réelle
+        out_val = raw_data.get("outputPower") or raw_data.get("invPower") or raw_data.get("outPower")
         self.data["power"] = self._safe_float(out_val, self.data["power"])
 
-        # 3. Solaire PV -> Mapping flexible
-        pv_val = raw_data.get("pv1power") or raw_data.get("pvPower") or raw_data.get("ppv")
+        # Solaire réel
+        pv_val = raw_data.get("pvPower") or raw_data.get("pv1power") or raw_data.get("ppv")
         self.data["pv1"] = self._safe_float(pv_val, self.data["pv1"])
 
-        # 4. État en ligne -> 1 = Online
+        # État
         online = raw_data.get("mainEquipOnline") or raw_data.get("fgOnline")
         self.data["is_online"] = (str(online) == "1")
 
     async def _update_rest_data(self):
-        """Exécute la requête de récupération des données de l'appareil."""
+        """Requête vers DETAIL_URL (Vraies données)."""
         if not self._auth_token:
             return
 
@@ -137,8 +126,8 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "Content-Type": "application/json"
         }
         
-        # L'URL finale ressemble à : http://.../V2/ID_APPAREIL
-        url = f"{OUTPUT_URL}{self._device_id}"
+        # UTILISATION DE DETAIL_URL ICI
+        url = f"{DETAIL_URL}{self._device_id}"
         
         try:
             async with self.session.get(url, headers=headers, timeout=15) as resp:
@@ -147,17 +136,16 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     if res.get("code") == 200 and "data" in res:
                         payload = res["data"]
                         
-                        # Si l'API renvoie une liste, on prend le premier élément
-                        if isinstance(payload, list) and len(payload) > 0:
-                            self._extract_values(payload[0])
-                        elif isinstance(payload, dict):
+                        # Detail renvoie généralement un objet direct, pas une liste
+                        if isinstance(payload, dict):
                             self._extract_values(payload)
+                        elif isinstance(payload, list) and len(payload) > 0:
+                            self._extract_values(payload[0])
                     else:
-                        _LOGGER.warning("Réponse API anormale : %s", res)
+                        _LOGGER.warning("API Detail : pas de données pour %s", self._device_id)
                 
                 elif resp.status == 401:
-                    _LOGGER.warning("Session expirée, le token sera renouvelé au prochain cycle")
                     self._auth_token = None
                     
         except Exception as e:
-            _LOGGER.error("Erreur lors de l'appel API REST : %s", e)
+            _LOGGER.error("Erreur API Detail : %s", e)
