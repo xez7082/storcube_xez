@@ -43,7 +43,6 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         self._auth_token: str | None = None
 
-        # 🔥 SAFE DEVICE IDS
         device_ids = entry.data.get(CONF_DEVICE_IDS)
 
         if not device_ids:
@@ -63,7 +62,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
     # -------------------------
-    # UTILS
+    # SAFE CONVERSION
     # -------------------------
     def _safe_float(self, value: Any, default: float = 0.0) -> float:
         try:
@@ -74,7 +73,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return default
 
     # -------------------------
-    # MAIN LOOP
+    # UPDATE LOOP
     # -------------------------
     async def _async_update_data(self) -> dict[str, Any]:
         try:
@@ -106,7 +105,6 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ) as resp:
 
             res = await resp.json()
-
             _LOGGER.debug("TOKEN RESPONSE: %s", res)
 
             if resp.status == 401:
@@ -120,10 +118,10 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._auth_token = str(token).strip()
                 return
 
-            raise UpdateFailed(f"Auth failed: {res}")
+        raise UpdateFailed(f"Auth failed: {res}")
 
     # -------------------------
-    # PARSING
+    # PARSE DATA
     # -------------------------
     def _extract_values(self, raw_data: dict[str, Any]) -> None:
         self.data["extra"] = raw_data
@@ -132,21 +130,18 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raw_data.get("soc")
             or raw_data.get("batteryLevel")
             or raw_data.get("reserved"),
-            self.data["soc"],
         )
 
         self.data["power"] = self._safe_float(
             raw_data.get("outputPower")
             or raw_data.get("invPower")
             or raw_data.get("outPower"),
-            self.data["power"],
         )
 
         self.data["pv1"] = self._safe_float(
             raw_data.get("pvPower")
             or raw_data.get("pv1Power")
             or raw_data.get("ppv"),
-            self.data["pv1"],
         )
 
         online = raw_data.get("fgOnline") or raw_data.get("mainEquipOnline")
@@ -159,10 +154,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not self._auth_token:
             raise UpdateFailed("No auth token")
 
-        headers = {
-            "Authorization": self._auth_token,
-        }
-
+        headers = {"Authorization": self._auth_token}
         params = {"equipId": self._device_id}
 
         _LOGGER.debug("REQUEST URL: %s", DETAIL_URL)
@@ -183,19 +175,20 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         _LOGGER.debug("API RESPONSE (%s): %s", self._device_id, res)
 
-        # AUTH EXPIRED
+        # TOKEN EXPIRED
         if resp.status == 401 or res.get("code") == 401:
             self._auth_token = None
             raise ConfigEntryAuthFailed("Token expired")
 
         # SUCCESS
         if resp.status == 200 and res.get("code") == 200:
+
             data_block = res.get("data")
 
-            # 🔥 FIX IMPORTANT : ne pas crash coordinator pour data=0
-            if data_block in (None, "", []):
+            # 🔥 FIX PRINCIPAL (TON BUG)
+            if not data_block or data_block == 0:
                 _LOGGER.warning(
-                    "Empty API data (device=%s) -> keep previous state",
+                    "Empty API data (device=%s) -> keeping previous state",
                     self._device_id,
                 )
                 return
