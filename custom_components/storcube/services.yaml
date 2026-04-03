@@ -1,49 +1,56 @@
-# Service pour définir la puissance de sortie
 set_power:
   name: Définir la puissance
-  description: Définit la puissance de sortie de la batterie Storcube.
+  description: Définit la puissance de sortie de la batterie StorCube.
   target:
     device:
-      integration: storcube  # Remplacez par le nom exact de votre domaine si différent
+      integration: storcube
   fields:
     power:
       name: Puissance
-      description: Valeur de la puissance de sortie souhaitée.
+      description: Valeur de puissance de sortie (W).
       required: true
-      default: 100
+      example: 100
       selector:
         number:
           min: 0
           max: 10000
           step: 1
-          unit_of_measurement: W
           mode: box
+          unit_of_measurement: "W"
 
-# Service pour définir le seuil de décharge
+
 set_threshold:
   name: Définir le seuil
-  description: Définit le seuil de réserve (décharge) de la batterie.
+  description: Définit le seuil de réserve de la batterie.
   target:
     device:
       integration: storcube
   fields:
     threshold:
       name: Seuil
-      description: Niveau de batterie minimum à conserver (0-100%).
+      description: Niveau minimum de batterie à conserver (%).
       required: true
-      default: 10
+      example: 10
       selector:
         number:
           min: 0
           max: 100
           step: 1
-          unit_of_measurement: "%"
           mode: slider
+          unit_of_measurement: "%"
 
-# Service pour vérifier les mises à jour de firmware
+
 check_firmware:
   name: Vérifier le firmware
-  description: Vérifie manuellement si une mise à jour est disponible.
+  description: Vérifie si une mise à jour du firmware est disponible.
   target:
     device:
       integration: storcube
+  fields:
+    device_id:
+      name: Device ID
+      description: Identifiant de l'appareil StorCube (optionnel selon implémentation).
+      required: false
+      example: "storcube_001"
+      selector:
+        text:
