@@ -25,7 +25,7 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Gère la récupération des données via REST uniquement (Stabilité maximale)."""
+    """Gère la récupération des données via REST uniquement."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         super().__init__(
@@ -49,14 +49,16 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
     def _safe_float(self, value: Any, default: float = 0.0) -> float:
-        """Convertit en float de manière sécurisée."""
+        """Conversion sécurisée en float."""
         try:
-            return float(value) if value is not None else default
+            if value is None or value == "":
+                return default
+            return float(value)
         except (ValueError, TypeError):
             return default
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Récupération périodique des données."""
+        """Mise à jour périodique."""
         try:
             if not self._auth_token:
                 await self.async_renew_token()
@@ -69,7 +71,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(f"Erreur Storcube ({self._device_id}) : {err}")
 
     async def async_renew_token(self):
-        """Récupère un nouveau token d'authentification."""
+        """Authentification et récupération du token."""
         payload = {
             "appCode": self.entry.data.get(CONF_APP_CODE, "Storcube"),
             "loginName": self.entry.data[CONF_LOGIN_NAME],
@@ -78,52 +80,50 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         async with self.session.post(TOKEN_URL, json=payload, timeout=10) as resp:
             if resp.status == 401:
                 self._auth_token = None
-                raise ConfigEntryAuthFailed("Identifiants Storcube incorrects")
+                raise ConfigEntryAuthFailed("Identifiants incorrects")
             
             res = await resp.json()
             if res.get("code") == 200:
                 self._auth_token = res["data"]["token"]
-                _LOGGER.info("Storcube : Token renouvelé pour l'appareil %s", self._device_id)
+                _LOGGER.info("Token Storcube mis à jour pour %s", self._device_id)
             else:
-                _LOGGER.error("Échec auth Storcube : %s", res.get("msg"))
+                _LOGGER.error("Erreur Auth Storcube : %s", res.get("msg"))
 
     def _extract_values(self, raw_data: dict[str, Any]):
-        """Mapping des données avec logs de diagnostic."""
+        """Mapping basé sur les données réelles reçues (reserved=SOC, outputPower=Watts)."""
         
-        # LOG DE DIAGNOSTIC : À consulter si les valeurs restent à 0
-        _LOGGER.debug("Données reçues pour %s : %s", self._device_id, raw_data)
+        _LOGGER.debug("Extraction pour %s : %s", self._device_id, raw_data)
 
-        # 1. Batterie (SOC)
+        # 1. SOC (Batterie %)
+        # On utilise 'reserved' en priorité car tes logs montrent que c'est là qu'est le 70%
         self.data["soc"] = self._safe_float(
-            raw_data.get("soc") or raw_data.get("reserved"), self.data["soc"]
+            raw_data.get("reserved") or raw_data.get("soc"), 
+            self.data["soc"]
         )
 
-        # 2. Puissance Sortie (AC)
+        # 2. Puissance de sortie (Décharge)
+        # On utilise 'outputPower' qui affiche 150 dans tes logs
         self.data["power"] = self._safe_float(
-            raw_data.get("invPower") or raw_data.get("totalInvPower") or raw_data.get("outputPower"),
+            raw_data.get("outputPower") or raw_data.get("invPower"),
             self.data["power"]
         )
 
-        # 3. Solaire (PV1 & PV2)
-        # On tente de mapper PV1 avec plusieurs clés possibles
-        pv1_val = raw_data.get("pv1power") or raw_data.get("totalPv1power") or raw_data.get("pvPower")
-        self.data["pv1"] = self._safe_float(pv1_val, self.data["pv1"])
-        
-        pv2_val = raw_data.get("pv2power") or raw_data.get("totalPv2power")
-        self.data["pv2"] = self._safe_float(pv2_val, self.data["pv2"])
-
-        # 4. Température
-        self.data["temp"] = self._safe_float(
-            raw_data.get("temp") or raw_data.get("temperature"), self.data["temp"]
+        # 3. Solaire (PV)
+        # Actuellement absent du JSON, on garde des fallbacks au cas où l'API évolue
+        pv_val = (
+            raw_data.get("pvPower") or 
+            raw_data.get("pv1power") or 
+            raw_data.get("ppv")
         )
+        self.data["pv1"] = self._safe_float(pv_val, self.data["pv1"])
 
-        # 5. État de connexion
-        online = raw_data.get("mainEquipOnline") or raw_data.get("fgOnline") or raw_data.get("isWork")
+        # 4. État
+        online = raw_data.get("mainEquipOnline") or raw_data.get("fgOnline")
         if online is not None:
             self.data["is_online"] = (str(online) == "1")
 
     async def _update_rest_data(self):
-        """Appel API REST."""
+        """Requête API."""
         if not self._auth_token:
             return
 
@@ -133,6 +133,8 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "Content-Type": "application/json"
         }
         
+        # Note: Si le solaire reste à 0, il faudra peut-être modifier OUTPUT_URL 
+        # dans const.py pour pointer vers une URL de détail.
         url = f"{OUTPUT_URL}{self._device_id}"
         
         try:
@@ -140,22 +142,21 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if resp.status == 200:
                     res = await resp.json()
                     if res.get("code") == 200 and "data" in res:
-                        # Gestion de la liste ou de l'objet direct
-                        data_payload = res["data"]
-                        raw = data_payload[0] if isinstance(data_payload, list) and len(data_payload) > 0 else data_payload
+                        payload = res["data"]
+                        # On prend le premier élément si c'est une liste
+                        raw = payload[0] if isinstance(payload, list) and len(payload) > 0 else payload
                         
                         if isinstance(raw, dict):
                             self._extract_values(raw)
                     else:
-                        _LOGGER.warning("Réponse API anormale (%s) : %s", self._device_id, res.get("msg"))
+                        _LOGGER.warning("Réponse API anormale : %s", res.get("msg"))
                 
                 elif resp.status == 401:
-                    _LOGGER.warning("Token expiré pour %s, renouvellement au prochain tour", self._device_id)
                     self._auth_token = None
                     
         except Exception as e:
-            _LOGGER.error("Erreur de requête REST pour %s : %s", self._device_id, e)
+            _LOGGER.error("Erreur de connexion API Storcube : %s", e)
 
     async def async_setup(self):
-        """Initialisation sans WebSocket."""
+        """Pas de WebSocket."""
         pass
