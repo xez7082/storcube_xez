@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import logging
+import asyncio
+import json
+import aiohttp
+import websockets
+
 from datetime import timedelta
 from typing import Any
-
-import aiohttp
 
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
@@ -21,7 +24,6 @@ from .const import (
     CONF_LOGIN_NAME,
     CONF_AUTH_PASSWORD,
     TOKEN_URL,
-    DETAIL_URL,
     SCAN_INTERVAL_SECONDS,
 )
 
@@ -38,10 +40,12 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             update_interval=timedelta(seconds=SCAN_INTERVAL_SECONDS),
         )
 
+        self.hass = hass
         self.entry = entry
         self.session = async_get_clientsession(hass)
 
         self._auth_token: str | None = None
+        self._ws_task = None
 
         device_ids = entry.data.get(CONF_DEVICE_IDS)
 
@@ -62,43 +66,23 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
     # -------------------------
-    # SAFE CONVERT
+    # START (IMPORTANT WS)
     # -------------------------
-    def _safe_float(self, value: Any, default: float = 0.0) -> float:
-        try:
-            if value in (None, "", "null"):
-                return default
-            return float(value)
-        except (ValueError, TypeError):
-            return default
+    async def async_config_entry_first_refresh(self):
+        await self._async_renew_token()
+        self._start_ws()
+        return await super().async_config_entry_first_refresh()
 
     # -------------------------
-    # MAIN UPDATE
-    # -------------------------
-    async def _async_update_data(self) -> dict[str, Any]:
-        try:
-            if not self._auth_token:
-                await self._async_renew_token()
-
-            await self._async_update_rest_data()
-            return dict(self.data)
-
-        except ConfigEntryAuthFailed:
-            raise
-        except Exception as err:
-            raise UpdateFailed(f"Unexpected error: {err}") from err
-
-    # -------------------------
-    # AUTH (FIX IMPORTANT)
+    # AUTH ONLY
     # -------------------------
     async def _async_renew_token(self) -> None:
         login = self.entry.data.get(CONF_LOGIN_NAME)
         password = self.entry.data.get(CONF_AUTH_PASSWORD)
         app_code = self.entry.data.get(CONF_APP_CODE, "Storcube")
 
-        # 🔥 FIX CRITIQUE (TON BUG "凭据不能为空")
         if not login or not password:
-            _LOGGER.error("Missing credentials: login=%s password=%s", login, password)
+            _LOGGER.error("Missing credentials")
             raise ConfigEntryAuthFailed("Missing credentials")
 
         payload = {
@@ -114,31 +98,64 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ) as resp:
 
             res = await resp.json()
-            _LOGGER.debug("TOKEN RESPONSE: %s", res)
 
             if resp.status == 401:
                 raise ConfigEntryAuthFailed("Invalid credentials")
 
             if resp.status == 200 and res.get("code") == 200:
-                token = (res.get("data") or {}).get("token")
-                if not token:
+                self._auth_token = (res.get("data") or {}).get("token")
+                if not self._auth_token:
                     raise UpdateFailed("Token missing")
-
-                self._auth_token = str(token).strip()
                 return
 
         raise UpdateFailed(f"Auth failed: {res}")
 
     # -------------------------
-    # PARSE
+    # WEBSOCKET START
+    # -------------------------
+    def _start_ws(self):
+        if self._ws_task:
+            return
+
+        self._ws_task = self.hass.async_create_background_task(
+            self._ws_loop(),
+            "storcube_ws",
+        )
+
+    # -------------------------
+    # WEBSOCKET LOOP
+    # -------------------------
+    async def _ws_loop(self):
+        url = f"ws://baterway.com:9501/equip/info/{self._device_id}"
+
+        while True:
+            try:
+                async with websockets.connect(url, ping_interval=20) as ws:
+                    _LOGGER.info("WebSocket connected")
+
+                    while True:
+                        msg = await ws.recv()
+                        data = json.loads(msg)
+
+                        _LOGGER.debug("WS DATA: %s", data)
+
+                        self._extract_values(data)
+
+                        # push update to HA
+                        self.async_set_updated_data(dict(self.data))
+
+            except Exception as err:
+                _LOGGER.warning("WS error: %s (retry in 5s)", err)
+                await asyncio.sleep(5)
+
+    # -------------------------
+    # PARSE DATA
     # -------------------------
     def _extract_values(self, raw_data: dict[str, Any]) -> None:
         self.data["extra"] = raw_data
 
         self.data["soc"] = self._safe_float(
-            raw_data.get("soc")
-            or raw_data.get("batteryLevel")
-            or raw_data.get("reserved"),
+            raw_data.get("soc") or raw_data.get("batteryLevel")
         )
 
         self.data["power"] = self._safe_float(
@@ -157,62 +174,18 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.data["is_online"] = str(online) in ("1", "true", "True")
 
     # -------------------------
-    # API CALL
+    # SAFE FLOAT
     # -------------------------
-    async def _async_update_rest_data(self) -> None:
-        if not self._auth_token:
-            raise UpdateFailed("No auth token")
-
-        headers = {
-            "Authorization": self._auth_token,
-        }
-
-        params = {"equipId": self._device_id}
-
-        _LOGGER.debug("REQUEST URL: %s", DETAIL_URL)
-        _LOGGER.debug("REQUEST PARAMS: %s", params)
-
+    def _safe_float(self, value: Any, default: float = 0.0) -> float:
         try:
-            async with self.session.get(
-                DETAIL_URL,
-                headers=headers,
-                params=params,
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
+            if value in (None, "", "null"):
+                return default
+            return float(value)
+        except Exception:
+            return default
 
-                res = await resp.json()
-
-        except aiohttp.ClientError as err:
-            raise UpdateFailed(f"HTTP error: {err}") from err
-
-        _LOGGER.debug("API RESPONSE (%s): %s", self._device_id, res)
-
-        # AUTH EXPIRED
-        if resp.status == 401 or res.get("code") == 401:
-            self._auth_token = None
-            raise ConfigEntryAuthFailed("Token expired")
-
-        # SUCCESS
-        if resp.status == 200 and res.get("code") == 200:
-
-            data_block = res.get("data")
-
-            # 🔥 FIX: API retourne parfois 0 (cas réel chez toi)
-            if data_block in (None, 0, "", [], {}):
-                _LOGGER.warning(
-                    "Empty API data (device=%s) -> keeping previous state",
-                    self._device_id,
-                )
-                return
-
-            if isinstance(data_block, list):
-                data_block = data_block[0] if data_block else None
-
-            if isinstance(data_block, dict):
-                self._extract_values(data_block)
-                return
-
-            _LOGGER.warning("Unexpected data format: %s", data_block)
-            return
-
-        raise UpdateFailed(f"API error: {res}")
+    # -------------------------
+    # KEEP ALIVE (NO REST POLLING)
+    # -------------------------
+    async def _async_update_data(self):
+        return dict(self.data)
