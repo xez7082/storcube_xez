@@ -55,7 +55,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
     # -------------------------
-    # Utils
+    # UTILS
     # -------------------------
     def _safe_float(self, value: Any, default: float = 0.0) -> float:
         try:
@@ -143,7 +143,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.data["is_online"] = str(online) == "1"
 
     # -------------------------
-    # API CALL (FIX FINAL)
+    # API CALL (FIX FINAL PROPRE)
     # -------------------------
     async def _async_update_rest_data(self) -> None:
         if not self._auth_token:
@@ -154,16 +154,22 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "Content-Type": "application/json",
         }
 
-        # 🔥 FIX CRITIQUE : equipId doit être dans l'URL
-        url = f"{DETAIL_URL}?equipId={self._device_id}"
+        # ✅ FIX PROPRE : PAS de concat URL
+        url = DETAIL_URL
+
+        params = {
+            "equipId": self._device_id
+        }
 
         _LOGGER.debug("REQUEST URL: %s", url)
+        _LOGGER.debug("REQUEST PARAMS: %s", params)
         _LOGGER.debug("REQUEST HEADERS: %s", headers)
 
         async with self.session.get(
             url,
             headers=headers,
-            timeout=15
+            params=params,
+            timeout=15,
         ) as resp:
 
             try:
@@ -173,25 +179,23 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             _LOGGER.debug("API RESPONSE (%s): %s", self._device_id, res)
 
-            # auth expired
+            # AUTH EXPIRED
             if resp.status == 401 or res.get("code") == 401:
                 self._auth_token = None
-                raise ConfigEntryAuthFailed("Auth failed / token expired")
+                raise ConfigEntryAuthFailed("Auth failed / expired token")
 
-            # success
+            # SUCCESS
             if resp.status == 200 and res.get("code") == 200:
                 data_block = res.get("data")
 
-                # 🔥 IMPORTANT : API retourne parfois 0 / null
-                if not data_block or data_block == 0:
+                # 🔥 FIX IMPORTANT : API retourne 0 / None / []
+                if data_block in (None, 0, "", []):
                     raise UpdateFailed(
                         f"Empty data field (device_id={self._device_id})"
                     )
 
                 if isinstance(data_block, list):
-                    if not data_block:
-                        raise UpdateFailed("Empty device list")
-                    data_block = data_block[0]
+                    data_block = data_block[0] if data_block else None
 
                 if isinstance(data_block, dict):
                     self._extract_values(data_block)
