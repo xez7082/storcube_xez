@@ -1,11 +1,15 @@
-"""Services pour l'intégration Storcube Battery Monitor."""
+"""Services for StorCube Battery Monitor."""
 from __future__ import annotations
 
+import logging
 import voluptuous as vol
-from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
+
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers import device_registry as dr
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.device_registry import async_get as dr_async_get
+from homeassistant.helpers import device_registry as dr
+from homeassistant.const import CONF_DEVICE_ID
 
 from .const import (
     DOMAIN,
@@ -16,84 +20,122 @@ from .const import (
     ATTR_FIRMWARE_NOTES,
 )
 
-# Constantes de service
+_LOGGER = logging.getLogger(__name__)
+
 SERVICE_SET_POWER = "set_power"
 SERVICE_SET_THRESHOLD = "set_threshold"
 
 ATTR_POWER = "power"
 ATTR_THRESHOLD = "threshold"
+ATTR_DEVICE_ID = "device_id"
 
-# Schémas de validation
-SET_POWER_SCHEMA = cv.make_entity_service_schema({
-    vol.Required(ATTR_POWER): cv.positive_int,
-})
 
-SET_THRESHOLD_SCHEMA = cv.make_entity_service_schema({
-    vol.Required(ATTR_THRESHOLD): vol.All(
-        vol.Coerce(int),
-        vol.Range(min=0, max=100)
-    ),
-})
+# -------------------------
+# SCHEMAS
+# -------------------------
+SET_POWER_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_DEVICE_ID): cv.string,
+        vol.Required(ATTR_POWER): vol.Coerce(int),
+    }
+)
 
+SET_THRESHOLD_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_DEVICE_ID): cv.string,
+        vol.Required(ATTR_THRESHOLD): vol.All(int, vol.Range(min=0, max=100)),
+    }
+)
+
+
+# -------------------------
+# COORDINATOR FINDER SAFE
+# -------------------------
+async def _get_coordinator(hass: HomeAssistant, device_id: str):
+    """Find coordinator safely."""
+
+    if DOMAIN not in hass.data:
+        raise HomeAssistantError("StorCube not loaded")
+
+    # search through all entries
+    for entry_id, entry_data in hass.data[DOMAIN].items():
+        if not isinstance(entry_data, dict):
+            continue
+
+        coordinator = entry_data.get("coordinator")
+
+        if not coordinator:
+            continue
+
+        # match device_id safely
+        if getattr(coordinator, "_device_id", None) == device_id:
+            return coordinator
+
+    raise HomeAssistantError(f"Coordinator not found for device {device_id}")
+
+
+# -------------------------
+# SERVICES
+# -------------------------
 async def async_setup_services(hass: HomeAssistant) -> None:
-    """Configurer les services pour l'intégration."""
+    """Register StorCube services."""
 
-    async def get_coordinator(call: ServiceCall):
-        """Récupérer le coordinateur approprié pour l'appel de service."""
-        # On cherche l'entity_id dans les données de l'appel
-        device_id = call.data.get("device_id")
-        if not device_id:
-            # Si pas de device_id, on prend le premier disponible (fallback)
-            if not hass.data.get(DOMAIN):
-                raise HomeAssistantError("Storcube integration not loaded")
-            return list(hass.data[DOMAIN].values())[0]["coordinator"]
-        
-        # Logique pour retrouver le coordinateur via le device registry
-        dev_reg = dr.async_get(hass)
-        device = dev_reg.async_get(device_id)
-        if not device:
-            raise HomeAssistantError(f"Device {device_id} not found")
-            
-        for entry_id in device.config_entries:
-            if entry_id in hass.data[DOMAIN]:
-                return hass.data[DOMAIN][entry_id]["coordinator"]
-        
-        raise HomeAssistantError("No coordinator found for this device")
-
+    # POWER
     async def handle_set_power(call: ServiceCall) -> None:
-        """Gérer le service set_power."""
-        coordinator = await get_coordinator(call)
+        device_id = call.data[ATTR_DEVICE_ID]
         power = call.data[ATTR_POWER]
+
+        coordinator = await _get_coordinator(hass, device_id)
+
         try:
             await coordinator.set_power_value(power)
         except Exception as err:
-            raise HomeAssistantError(f"Error setting power: {err}") from err
+            _LOGGER.exception("set_power failed")
+            raise HomeAssistantError(str(err)) from err
 
+    # THRESHOLD
     async def handle_set_threshold(call: ServiceCall) -> None:
-        """Gérer le service set_threshold."""
-        coordinator = await get_coordinator(call)
+        device_id = call.data[ATTR_DEVICE_ID]
         threshold = call.data[ATTR_THRESHOLD]
+
+        coordinator = await _get_coordinator(hass, device_id)
+
         try:
             await coordinator.set_threshold_value(threshold)
         except Exception as err:
-            raise HomeAssistantError(f"Error setting threshold: {err}") from err
+            _LOGGER.exception("set_threshold failed")
+            raise HomeAssistantError(str(err)) from err
 
-    async def handle_check_firmware(call: ServiceCall) -> ServiceResponse:
-        """Gérer le service check_firmware avec retour de données."""
-        coordinator = await get_coordinator(call)
-        firmware_info = await coordinator.check_firmware_upgrade()
-        
-        if not firmware_info:
-            return {"status": "no_data"}
+    # FIRMWARE (response service)
+    async def handle_check_firmware(call: ServiceCall) -> dict:
+        device_id = call.data.get(ATTR_DEVICE_ID)
+
+        coordinator = await _get_coordinator(hass, device_id)
+
+        firmware = await coordinator.check_firmware_upgrade()
+
+        if not firmware:
+            return {
+                "status": "no_data",
+                ATTR_FIRMWARE_CURRENT: "Unknown",
+                ATTR_FIRMWARE_LATEST: "Unknown",
+                ATTR_FIRMWARE_UPGRADE_AVAILABLE: False,
+                ATTR_FIRMWARE_NOTES: [],
+            }
 
         return {
-            ATTR_FIRMWARE_CURRENT: firmware_info.get("current_version", "Inconnue"),
-            ATTR_FIRMWARE_LATEST: firmware_info.get("latest_version", "Inconnue"),
-            ATTR_FIRMWARE_UPGRADE_AVAILABLE: firmware_info.get("upgrade_available", False),
-            ATTR_FIRMWARE_NOTES: firmware_info.get("firmware_notes", [])
+            "status": "ok",
+            ATTR_FIRMWARE_CURRENT: firmware.get("current_version", "Unknown"),
+            ATTR_FIRMWARE_LATEST: firmware.get("latest_version", "Unknown"),
+            ATTR_FIRMWARE_UPGRADE_AVAILABLE: firmware.get(
+                "upgrade_available", False
+            ),
+            ATTR_FIRMWARE_NOTES: firmware.get("firmware_notes", []),
         }
 
-    # Enregistrement des services
+    # -------------------------
+    # REGISTER SERVICES
+    # -------------------------
     hass.services.async_register(
         DOMAIN,
         SERVICE_SET_POWER,
@@ -112,11 +154,19 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         DOMAIN,
         SERVICE_CHECK_FIRMWARE,
         handle_check_firmware,
-        schema=cv.make_entity_service_schema({}),
-        supports_response=SupportsResponse.ONLY,
+        schema=vol.Schema({ATTR_DEVICE_ID: cv.string}),
     )
 
+
+# -------------------------
+# UNLOAD
+# -------------------------
 async def async_unload_services(hass: HomeAssistant) -> None:
-    """Décharger les services."""
-    for service in [SERVICE_SET_POWER, SERVICE_SET_THRESHOLD, SERVICE_CHECK_FIRMWARE]:
-        hass.services.async_remove(DOMAIN, service)
+    """Unregister services."""
+    for service in (
+        SERVICE_SET_POWER,
+        SERVICE_SET_THRESHOLD,
+        SERVICE_CHECK_FIRMWARE,
+    ):
+        if hass.services.has_service(DOMAIN, service):
+            hass.services.async_remove(DOMAIN, service)
