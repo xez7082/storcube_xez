@@ -10,30 +10,29 @@ DEVELOPER: Final = "xez7082"
 
 # Configuration des clés
 CONF_DEVICE_ID: Final = "device_id"
-CONF_DEVICE_IDS: Final = "device_ids"   # ✅ AJOUT
+CONF_DEVICE_IDS: Final = "device_ids"
 CONF_APP_CODE: Final = "app_code"
 CONF_LOGIN_NAME: Final = "login_name"
 CONF_AUTH_PASSWORD: Final = "auth_password"
-CONF_DEBUG: Final = "debug"             # ✅ AJOUT
+CONF_DEBUG: Final = "debug"
 
 # Valeurs par défaut
 DEFAULT_PORT: Final = 1883
 DEFAULT_APP_CODE: Final = "Storcube"
 
-# API Endpoints (Baterway / Storcube)
+# API BASE
 BASE_URL: Final = "http://baterway.com"
+
+# 🚨 FIX IMPORTANT : PAS DE QUERY STRING ICI
 TOKEN_URL: Final = f"{BASE_URL}/api/user/app/login"
-
-# DETAIL_URL = données temps réel
-DETAIL_URL: Final = f"{BASE_URL}/api/equip/detail?equipId="
-
-# SCENE_URL = réglages programmés
-SCENE_URL: Final = f"{BASE_URL}/api/scene/user/list/V2?equipId="
-
-WS_URI: Final = "ws://baterway.com:9501/equip/info/"
-FIRMWARE_URL: Final = f"{BASE_URL}/api/equip/version/need/upgrade?equipId="
+DETAIL_URL: Final = f"{BASE_URL}/api/equip/detail"
+SCENE_URL: Final = f"{BASE_URL}/api/scene/user/list/V2"
+FIRMWARE_URL: Final = f"{BASE_URL}/api/equip/version/need/upgrade"
 SET_POWER_URL: Final = f"{BASE_URL}/api/slb/equip/set/power"
 SET_THRESHOLD_URL: Final = f"{BASE_URL}/api/scene/threshold/set"
+
+# WS
+WS_URI: Final = "ws://baterway.com:9501/equip/info/"
 
 # MQTT Topics
 TOPIC_BASE: Final = "storcube/{device_id}"
