@@ -10,25 +10,25 @@ DEVELOPER: Final = "xez7082"
 
 # Configuration des clés
 CONF_DEVICE_ID: Final = "device_id"
+CONF_DEVICE_IDS: Final = "device_ids"   # ✅ AJOUT
 CONF_APP_CODE: Final = "app_code"
 CONF_LOGIN_NAME: Final = "login_name"
 CONF_AUTH_PASSWORD: Final = "auth_password"
+CONF_DEBUG: Final = "debug"             # ✅ AJOUT
 
 # Valeurs par défaut
 DEFAULT_PORT: Final = 1883
 DEFAULT_APP_CODE: Final = "Storcube"
 
 # API Endpoints (Baterway / Storcube)
-BASE_URL: Final = "http://baterway.com" 
+BASE_URL: Final = "http://baterway.com"
 TOKEN_URL: Final = f"{BASE_URL}/api/user/app/login"
 
-# --- CRUCIAL : LES DEUX URLS DIFFÉRENTES ---
-# DETAIL_URL = Pour le SOC, le Solaire et la Puissance en temps réel
+# DETAIL_URL = données temps réel
 DETAIL_URL: Final = f"{BASE_URL}/api/equip/detail?equipId="
 
-# SCENE_URL (anciennement OUTPUT_URL) = Pour voir les réglages programmés (70%, 150W)
+# SCENE_URL = réglages programmés
 SCENE_URL: Final = f"{BASE_URL}/api/scene/user/list/V2?equipId="
-# --------------------------------------------
 
 WS_URI: Final = "ws://baterway.com:9501/equip/info/"
 FIRMWARE_URL: Final = f"{BASE_URL}/api/equip/version/need/upgrade?equipId="
@@ -44,23 +44,23 @@ TOPIC_SET_POWER: Final = "set_power"
 TOPIC_OUTPUT_POWER: Final = "outputPower"
 TOPIC_SET_THRESHOLD: Final = "set_threshold"
 
-# Icônes (MDI)
+# Icônes
 ICON_BATTERY: Final = "mdi:battery"
 ICON_POWER: Final = "mdi:transmission-tower"
 ICON_SOLAR: Final = "mdi:solar-power"
 ICON_FIRMWARE: Final = "mdi:update"
 
-# Constantes pour les services
+# Services
 SERVICE_CHECK_FIRMWARE: Final = "check_firmware"
 SERVICE_SET_POWER: Final = "set_power"
 SERVICE_SET_THRESHOLD: Final = "set_threshold"
 
-# Attributs Firmware
+# Firmware attributes
 ATTR_FIRMWARE_CURRENT: Final = "current_version"
 ATTR_FIRMWARE_LATEST: Final = "latest_version"
 ATTR_FIRMWARE_UPGRADE_AVAILABLE: Final = "upgrade_available"
 ATTR_FIRMWARE_NOTES: Final = "firmware_notes"
 
-# Délais et Timeouts
+# Timings
 SCAN_INTERVAL_SECONDS: Final = 30
 TIMEOUT_SECONDS: Final = 30
