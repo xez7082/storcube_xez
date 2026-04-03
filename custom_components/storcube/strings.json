@@ -4,26 +4,28 @@
     "step": {
       "user": {
         "title": "Configuration de Storcube",
-        "description": "Connectez votre batterie Storcube en saisissant vos identifiants Cloud et vos paramètres MQTT.",
+        "description": "Connectez votre batterie Storcube via le Cloud et/ou MQTT.",
         "data": {
           "login_name": "Email / Identifiant",
           "auth_password": "Mot de passe",
           "device_id": "ID de l'appareil (Device ID)",
-          "host": "Broker MQTT (Hôte)",
+          "host": "Broker MQTT (hôte)",
           "port": "Port MQTT"
         },
         "data_description": {
-          "host": "Adresse IP de votre broker MQTT (ex: 192.168.1.50). Laissez vide si non utilisé.",
-          "device_id": "L'identifiant unique situé sur l'étiquette de votre batterie."
+          "host": "Adresse IP ou hostname du broker MQTT (ex: 192.168.1.50). Laisser vide si non utilisé.",
+          "device_id": "Identifiant unique de la batterie (sur l’étiquette ou dans l’app)."
         }
       }
     },
-    "error": {
-      "cannot_connect": "Échec de connexion aux serveurs Storcube ou au Broker MQTT",
-      "invalid_auth": "Identifiant ou mot de passe incorrect",
-      "invalid_device": "Le Device ID semble incorrect",
-      "unknown": "Une erreur inattendue est survenue"
+
+    "errors": {
+      "cannot_connect": "Impossible de se connecter aux serveurs Storcube ou au broker MQTT.",
+      "invalid_auth": "Identifiants incorrects.",
+      "invalid_device": "Device ID invalide ou introuvable.",
+      "unknown": "Une erreur inattendue est survenue."
     },
+
     "abort": {
       "already_configured": "Cette batterie Storcube est déjà configurée sur cette instance."
     }
