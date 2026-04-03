@@ -24,3 +24,6 @@ from .const import (
     CONF_AUTH_PASSWORD,
     TOKEN_URL,
     SCAN_INTERVAL_SECONDS,
+)
+
+_LOGGER = logging.getLogger(__name__)
