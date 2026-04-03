@@ -1,3 +1,3 @@
-"""Version de l'intégration Storcube Battery Monitor."""
+"""Version de l'intégration Storcube."""
 
-VERSION = "1.2.3"
+VERSION: str = "1.2.3"
