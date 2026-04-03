@@ -18,7 +18,7 @@ from .const import (
     CONF_LOGIN_NAME,
     CONF_AUTH_PASSWORD,
     TOKEN_URL,
-    DETAIL_URL,  # On utilise DETAIL_URL au lieu de OUTPUT_URL
+    DETAIL_URL,
     SCAN_INTERVAL_SECONDS,
 )
 
@@ -72,7 +72,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(f"Erreur de communication : {err}")
 
     async def async_renew_token(self):
-        """Authentification."""
+        """Authentification auprès de Baterway."""
         payload = {
             "appCode": self.entry.data.get(CONF_APP_CODE, "Storcube"),
             "loginName": self.entry.data[CONF_LOGIN_NAME],
@@ -81,42 +81,43 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         
         try:
             async with self.session.post(TOKEN_URL, json=payload, timeout=10) as resp:
-                if resp.status == 401:
-                    raise ConfigEntryAuthFailed("Identifiants incorrects")
-                
                 res = await resp.json()
-                if res.get("code") == 200 and "data" in res:
+                if resp.status == 200 and res.get("code") == 200:
                     self._auth_token = res["data"]["token"]
+                elif resp.status == 401:
+                    raise ConfigEntryAuthFailed("Identifiants incorrects")
                 else:
                     raise UpdateFailed(f"Auth fail: {res.get('msg')}")
         except asyncio.TimeoutError:
-            raise UpdateFailed("Timeout auth")
+            raise UpdateFailed("Timeout lors de l'auth")
 
     def _extract_values(self, raw_data: dict[str, Any]):
-        """Mapping des données REELLES de l'API Detail."""
+        """Mapping intelligent des données réelles."""
+        # Log en WARNING pour être sûr de voir passer les données dans la console HA
+        _LOGGER.warning("--- DONNÉES BRUTES REÇUES (ID: %s) ---", self._device_id)
+        _LOGGER.warning(raw_data)
         
-        _LOGGER.debug("Extraction des données réelles pour %s : %s", self._device_id, raw_data)
         self.data["extra"] = raw_data
 
-        # Sur l'API Detail, les clés peuvent être différentes. 
-        # On garde 'reserved' et 'soc' en secours, mais on ajoute les clés temps réel probables
-        soc_val = raw_data.get("soc") or raw_data.get("reserved") or raw_data.get("batteryLevel")
+        # 1. SOC (Niveau batterie)
+        # On teste les clés connues pour l'API Detail
+        soc_val = raw_data.get("soc") or raw_data.get("batteryLevel") or raw_data.get("reserved")
         self.data["soc"] = self._safe_float(soc_val, self.data["soc"])
 
-        # Puissance de sortie réelle
+        # 2. Puissance de sortie (W)
         out_val = raw_data.get("outputPower") or raw_data.get("invPower") or raw_data.get("outPower")
         self.data["power"] = self._safe_float(out_val, self.data["power"])
 
-        # Solaire réel
-        pv_val = raw_data.get("pvPower") or raw_data.get("pv1power") or raw_data.get("ppv")
+        # 3. Solaire (W)
+        pv_val = raw_data.get("pvPower") or raw_data.get("pv1Power") or raw_data.get("ppv")
         self.data["pv1"] = self._safe_float(pv_val, self.data["pv1"])
 
-        # État
-        online = raw_data.get("mainEquipOnline") or raw_data.get("fgOnline")
+        # 4. État
+        online = raw_data.get("fgOnline") or raw_data.get("mainEquipOnline")
         self.data["is_online"] = (str(online) == "1")
 
     async def _update_rest_data(self):
-        """Requête vers DETAIL_URL (Vraies données)."""
+        """Appel de l'API Detail."""
         if not self._auth_token:
             return
 
@@ -126,26 +127,27 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "Content-Type": "application/json"
         }
         
-        # UTILISATION DE DETAIL_URL ICI
         url = f"{DETAIL_URL}{self._device_id}"
         
         try:
             async with self.session.get(url, headers=headers, timeout=15) as resp:
                 if resp.status == 200:
                     res = await resp.json()
-                    if res.get("code") == 200 and "data" in res:
-                        payload = res["data"]
-                        
-                        # Detail renvoie généralement un objet direct, pas une liste
-                        if isinstance(payload, dict):
-                            self._extract_values(payload)
-                        elif isinstance(payload, list) and len(payload) > 0:
-                            self._extract_values(payload[0])
+                    data_block = res.get("data")
+                    
+                    if data_block:
+                        # Si c'est une liste, on prend le premier
+                        if isinstance(data_block, list) and len(data_block) > 0:
+                            self._extract_values(data_block[0])
+                        # Si c'est un dictionnaire direct
+                        elif isinstance(data_block, dict):
+                            self._extract_values(data_block)
                     else:
-                        _LOGGER.warning("API Detail : pas de données pour %s", self._device_id)
+                        _LOGGER.error("Réponse vide de l'API Detail pour %s", self._device_id)
                 
                 elif resp.status == 401:
+                    _LOGGER.warning("Token expiré pour %s, renouvellement au prochain cycle", self._device_id)
                     self._auth_token = None
                     
         except Exception as e:
-            _LOGGER.error("Erreur API Detail : %s", e)
+            _LOGGER.error("Erreur critique lors de l'appel Detail : %s", e)
