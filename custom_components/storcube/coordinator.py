@@ -24,8 +24,8 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.hass = hass
         self.entry = entry
 
-        # 🔥 IMPORTANT : utiliser self.data (pas self._data)
-        self.data: dict[str, Any] = {
+        # 🔥 INTERNAL STATE (IMPORTANT FIX)
+        self._data: dict[str, Any] = {
             "soc": 0.0,
             "power": 0.0,
             "pv": 0.0,
@@ -33,34 +33,36 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "raw": {},
         }
 
-    async def _async_update_data(self):
+    async def _async_update_data(self) -> dict[str, Any]:
         """
         No polling mode.
-        Data updated only via update_from_ws().
+        Data is only updated via MQTT / WS callback.
         """
-        return self.data
+        return self._data
 
     # =========================================================
-    # ENTRY POINT MQTT / WS
+    # MQTT / WS ENTRY POINT
     # =========================================================
     def update_from_ws(self, payload: dict[str, Any]) -> None:
         """Push new data from MQTT / WebSocket."""
 
         try:
             # store raw payload
-            self.data["raw"] = payload
+            self._data["raw"] = payload
 
-            # values mapping
-            self.data["soc"] = self._to_float(payload.get("soc"))
-            self.data["power"] = self._to_float(payload.get("outputPower"))
-            self.data["pv"] = self._to_float(payload.get("pvPower"))
+            # mapping safe
+            self._data["soc"] = self._to_float(payload.get("soc"))
+            self._data["power"] = self._to_float(payload.get("outputPower"))
+            self._data["pv"] = self._to_float(payload.get("pvPower"))
 
-            # online detection
+            # online detection safe
             online = payload.get("online") or payload.get("fgOnline")
-            self.data["online"] = str(online).lower() in ("1", "true", "yes", "on")
+            self._data["online"] = str(online).lower() in (
+                "1", "true", "yes", "on"
+            )
 
             # 🔥 PUSH UPDATE TO HOME ASSISTANT
-            self.async_set_updated_data(dict(self.data))
+            self.async_set_updated_data(dict(self._data))
 
         except Exception as err:
             _LOGGER.exception("StorCube parse error: %s", err)
