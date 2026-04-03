@@ -42,7 +42,6 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.session = async_get_clientsession(hass)
         self._auth_token: str | None = None
 
-        # ✅ FIX CRITIQUE : multi-device safe
         device_ids = entry.data.get(CONF_DEVICE_IDS, [])
         if not device_ids:
             raise ValueError("No device IDs configured")
@@ -86,26 +85,22 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "password": self.entry.data[CONF_AUTH_PASSWORD],
         }
 
-        try:
-            async with self.session.post(
-                TOKEN_URL, json=payload, timeout=10
-            ) as resp:
-                res = await resp.json()
+        async with self.session.post(
+            TOKEN_URL, json=payload, timeout=10
+        ) as resp:
+            res = await resp.json()
 
-                if resp.status == 401:
-                    raise ConfigEntryAuthFailed("Invalid credentials")
+            _LOGGER.debug("TOKEN RESPONSE: %s", res)
 
-                if resp.status == 200 and res.get("code") == 200:
-                    self._auth_token = res["data"]["token"]
-                    return
+            if resp.status == 401:
+                raise ConfigEntryAuthFailed("Invalid credentials")
 
-                raise UpdateFailed(f"Auth failed: {res.get('msg')}")
+            if resp.status == 200 and res.get("code") == 200:
+                token = res["data"]["token"]
+                self._auth_token = str(token).strip()
+                return
 
-        except ConfigEntryAuthFailed:
-            raise
-
-        except Exception as err:
-            raise UpdateFailed(f"Auth error: {err}") from err
+            raise UpdateFailed(f"Auth failed: {res}")
 
     def _extract_values(self, raw_data: dict[str, Any]) -> None:
         _LOGGER.debug("Raw data (%s): %s", self._device_id, raw_data)
@@ -140,40 +135,44 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not self._auth_token:
             raise UpdateFailed("No auth token")
 
+        # 🔥 FIX IMPORTANT : API attend souvent token direct ou Bearer
         headers = {
-            "Authorization": self._auth_token,
+            "Authorization": f"Bearer {self._auth_token}",
             "appCode": self.entry.data.get(CONF_APP_CODE, "Storcube"),
             "Content-Type": "application/json",
         }
 
         url = f"{DETAIL_URL}{self._device_id}"
 
-        try:
-            async with self.session.get(
-                url, headers=headers, timeout=15
-            ) as resp:
-                res = await resp.json()
+        _LOGGER.debug("REQUEST URL: %s", url)
+        _LOGGER.debug("REQUEST HEADERS: %s", headers)
 
-                _LOGGER.debug("API response (%s): %s", self._device_id, res)
+        async with self.session.get(
+            url, headers=headers, timeout=15
+        ) as resp:
+            res = await resp.json()
 
-                if resp.status == 401:
-                    self._auth_token = None
-                    raise UpdateFailed("Token expired")
+            _LOGGER.debug("API RESPONSE (%s): %s", self._device_id, res)
 
-                if resp.status == 200 and res.get("code") == 200:
-                    data_block = res.get("data")
+            if resp.status == 401:
+                self._auth_token = None
+                raise UpdateFailed("Token expired")
 
+            if resp.status == 200 and res.get("code") == 200:
+                data_block = res.get("data")
+
+                if data_block is None:
+                    raise UpdateFailed("No data field in response")
+
+                if isinstance(data_block, list):
                     if not data_block:
-                        raise UpdateFailed("Empty data field")
+                        raise UpdateFailed("Empty device list")
+                    data_block = data_block[0]
 
-                    if isinstance(data_block, list):
-                        self._extract_values(data_block[0])
-                    elif isinstance(data_block, dict):
-                        self._extract_values(data_block)
-
+                if isinstance(data_block, dict):
+                    self._extract_values(data_block)
                     return
 
-                raise UpdateFailed(f"API error: {res}")
+                raise UpdateFailed("Invalid data format")
 
-        except Exception as err:
-            raise UpdateFailed(f"REST error: {err}") from err
+            raise UpdateFailed(f"API error: {res}")
