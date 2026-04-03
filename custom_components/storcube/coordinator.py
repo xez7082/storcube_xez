@@ -62,7 +62,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
     # -------------------------
-    # SAFE CONVERSION
+    # SAFE CONVERT
     # -------------------------
     def _safe_float(self, value: Any, default: float = 0.0) -> float:
         try:
@@ -73,7 +73,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return default
 
     # -------------------------
-    # UPDATE LOOP
+    # MAIN UPDATE
     # -------------------------
     async def _async_update_data(self) -> dict[str, Any]:
         try:
@@ -89,13 +89,22 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(f"Unexpected error: {err}") from err
 
     # -------------------------
-    # AUTH
+    # AUTH (FIX IMPORTANT)
     # -------------------------
     async def _async_renew_token(self) -> None:
+        login = self.entry.data.get(CONF_LOGIN_NAME)
+        password = self.entry.data.get(CONF_AUTH_PASSWORD)
+        app_code = self.entry.data.get(CONF_APP_CODE, "Storcube")
+
+        # 🔥 FIX CRITIQUE (TON BUG "凭据不能为空")
+        if not login or not password:
+            _LOGGER.error("Missing credentials: login=%s password=%s", login, password)
+            raise ConfigEntryAuthFailed("Missing credentials")
+
         payload = {
-            "appCode": self.entry.data.get(CONF_APP_CODE, "Storcube"),
-            "loginName": self.entry.data.get(CONF_LOGIN_NAME),
-            "password": self.entry.data.get(CONF_AUTH_PASSWORD),
+            "appCode": app_code,
+            "loginName": login,
+            "password": password,
         }
 
         async with self.session.post(
@@ -121,7 +130,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         raise UpdateFailed(f"Auth failed: {res}")
 
     # -------------------------
-    # PARSE DATA
+    # PARSE
     # -------------------------
     def _extract_values(self, raw_data: dict[str, Any]) -> None:
         self.data["extra"] = raw_data
@@ -154,7 +163,10 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not self._auth_token:
             raise UpdateFailed("No auth token")
 
-        headers = {"Authorization": self._auth_token}
+        headers = {
+            "Authorization": self._auth_token,
+        }
+
         params = {"equipId": self._device_id}
 
         _LOGGER.debug("REQUEST URL: %s", DETAIL_URL)
@@ -175,7 +187,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         _LOGGER.debug("API RESPONSE (%s): %s", self._device_id, res)
 
-        # TOKEN EXPIRED
+        # AUTH EXPIRED
         if resp.status == 401 or res.get("code") == 401:
             self._auth_token = None
             raise ConfigEntryAuthFailed("Token expired")
@@ -185,8 +197,8 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             data_block = res.get("data")
 
-            # 🔥 FIX PRINCIPAL (TON BUG)
-            if not data_block or data_block == 0:
+            # 🔥 FIX: API retourne parfois 0 (cas réel chez toi)
+            if data_block in (None, 0, "", [], {}):
                 _LOGGER.warning(
                     "Empty API data (device=%s) -> keeping previous state",
                     self._device_id,
