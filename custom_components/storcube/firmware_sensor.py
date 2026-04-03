@@ -1,10 +1,10 @@
-"""Capteur de firmware pour l'intégration Storcube Battery Monitor."""
+"""Capteur de firmware pour l'intégration StorCube Battery Monitor."""
 from __future__ import annotations
 
 import logging
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorEntity, SensorDeviceClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
@@ -22,64 +22,87 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Configurer le capteur de firmware."""
+    """Setup firmware sensor."""
     coordinator = hass.data[DOMAIN][config_entry.entry_id]
-    
-    # On n'ajoute l'entité que si des données de firmware sont présentes
-    async_add_entities([StorCubeFirmwareSensor(coordinator, config_entry)])
+
+    async_add_entities([
+        StorCubeFirmwareSensor(coordinator, config_entry)
+    ])
+
 
 class StorCubeFirmwareSensor(CoordinatorEntity, SensorEntity):
-    """Capteur pour les informations de firmware StorCube."""
+    """Sensor firmware StorCube."""
 
     def __init__(self, coordinator, config_entry: ConfigEntry) -> None:
-        """Initialiser le capteur de firmware."""
         super().__init__(coordinator)
+
         self.config_entry = config_entry
-        
-        # Propriétés de base de l'entité
-        self._attr_name = "Firmware StorCube"
+
+        self._attr_name = "StorCube Firmware"
         self._attr_unique_id = f"{config_entry.entry_id}_firmware"
+
         self._attr_icon = "mdi:update"
-        
-        # Device Info pour lier le capteur à l'appareil principal
+        self._attr_device_class = SensorDeviceClass.ENUM
+
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, config_entry.entry_id)},
             name=NAME,
             manufacturer="StorCube",
         )
 
-    @property
-    def native_value(self) -> str | None:
-        """Retourner l'état du capteur (version et statut)."""
-        firmware_data = self.coordinator.data.get("firmware", {})
-        current_version = firmware_data.get("current_version", "Inconnue")
-        upgrade_available = firmware_data.get("upgrade_available", False)
-        
-        if upgrade_available:
-            return f"Mise à jour disponible ({current_version})"
-        return f"À jour ({current_version})"
+    # -------------------------
+    # SAFE DATA ACCESS
+    # -------------------------
+    def _fw(self) -> dict[str, Any]:
+        """Récupération sécurisée firmware."""
+        data = self.coordinator.data or {}
 
+        # compatible plusieurs structures possibles
+        return (
+            data.get("firmware")
+            or data
+            or {}
+        )
+
+    # -------------------------
+    # STATE
+    # -------------------------
+    @property
+    def native_value(self) -> str:
+        fw = self._fw()
+
+        current = fw.get("current_version", "Unknown")
+        upgrade = bool(fw.get("upgrade_available", False))
+
+        if upgrade:
+            return f"Update available ({current})"
+
+        return f"Up to date ({current})"
+
+    # -------------------------
+    # ATTRIBUTES
+    # -------------------------
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Retourner les attributs supplémentaires à partir du coordinateur."""
-        firmware_data = self.coordinator.data.get("firmware", {})
-        
+        fw = self._fw()
+
         return {
-            ATTR_FIRMWARE_CURRENT: firmware_data.get("current_version", "Inconnue"),
-            ATTR_FIRMWARE_LATEST: firmware_data.get("latest_version", "Inconnue"),
-            ATTR_FIRMWARE_UPGRADE_AVAILABLE: firmware_data.get("upgrade_available", False),
-            ATTR_FIRMWARE_NOTES: firmware_data.get("firmware_notes", []),
-            "last_check": firmware_data.get("last_check", "Jamais"),
+            ATTR_FIRMWARE_CURRENT: fw.get("current_version", "Unknown"),
+            ATTR_FIRMWARE_LATEST: fw.get("latest_version", "Unknown"),
+            ATTR_FIRMWARE_UPGRADE_AVAILABLE: fw.get("upgrade_available", False),
+            ATTR_FIRMWARE_NOTES: fw.get("firmware_notes", []),
         }
 
+    # -------------------------
+    # UPDATE HANDLING
+    # -------------------------
     @callback
     def _handle_coordinator_update(self) -> None:
-        """Gérer la mise à jour des données du coordinateur."""
-        # Cette méthode est appelée automatiquement par CoordinatorEntity
-        # Elle déclenche l'écriture de l'état dans HA
+        """Sync HA state with coordinator."""
         self.async_write_ha_state()
