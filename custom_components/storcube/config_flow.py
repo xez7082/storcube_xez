@@ -34,7 +34,7 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 login = user_input.get(CONF_LOGIN_NAME)
                 password = user_input.get(CONF_AUTH_PASSWORD)
 
-                # 🔥 FIX CRITIQUE: validation credentials
+                # 🔥 FIX 1: validation stricte
                 if not login or not password:
                     errors["base"] = "invalid_auth"
                     return self.async_show_form(
@@ -43,8 +43,13 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         errors=errors,
                     )
 
+                # 🔥 FIX 2: nettoyage device IDs
                 raw_ids = user_input.get(CONF_DEVICE_ID, "")
-                device_ids = [d.strip() for d in raw_ids.split(",") if d.strip()]
+                device_ids = [
+                    d.strip()
+                    for d in raw_ids.split(",")
+                    if d and d.strip()
+                ]
 
                 if not device_ids:
                     errors["base"] = "no_device"
@@ -54,19 +59,18 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         errors=errors,
                     )
 
-                # unique ID stable
-                await self.async_set_unique_id(
-                    f"{login}_{device_ids[0]}"
-                )
+                # 🔥 FIX 3: unique_id stable + safe
+                unique_id = f"{login}_{device_ids[0]}"
+                await self.async_set_unique_id(unique_id)
                 self._abort_if_unique_id_configured()
 
                 return self.async_create_entry(
-                    title=f"StorCube ({len(device_ids)} device{'s' if len(device_ids) > 1 else ''})",
+                    title=f"Storcube ({device_ids[0]})",
                     data={
                         CONF_LOGIN_NAME: login,
                         CONF_AUTH_PASSWORD: password,
                         CONF_DEVICE_IDS: device_ids,
-                        CONF_APP_CODE: DEFAULT_APP_CODE,
+                        CONF_APP_CODE: user_input.get(CONF_APP_CODE, DEFAULT_APP_CODE),
                         CONF_DEBUG: user_input.get(CONF_DEBUG, False),
                     },
                 )
@@ -87,6 +91,7 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_LOGIN_NAME): str,
                 vol.Required(CONF_AUTH_PASSWORD): str,
                 vol.Required(CONF_DEVICE_ID): str,
+                vol.Optional(CONF_APP_CODE, default=DEFAULT_APP_CODE): str,
                 vol.Optional(CONF_DEBUG, default=False): bool,
             }
         )
