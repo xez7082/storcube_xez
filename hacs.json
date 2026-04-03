@@ -4,13 +4,10 @@
   "version": "1.2.3",
   "documentation": "https://github.com/jon7119/storcube",
   "issue_tracker": "https://github.com/jon7119/storcube/issues",
-  "dependencies": [],
-  "codeowners": ["@xez7082"],
-  "requirements": [
-    "aiohttp",
-    "websockets"
-  ],
+  "codeowners": ["@jon7119"],
+  "config_flow": true,
   "iot_class": "cloud_polling",
-  "homeassistant": "2025.9.1",
-  "render_readme": true
+  "requirements": [
+    "aiohttp>=3.9.0"
+  ]
 }
