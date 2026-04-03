@@ -8,22 +8,23 @@ VERSION: Final = "1.2.3"
 MANUFACTURER: Final = "Storcube"
 DEVELOPER: Final = "xez7082"
 
-# Configuration des clés
+# Configuration des clés (IMPORTANT : cohérence API + config_flow)
 CONF_DEVICE_ID: Final = "device_id"
 CONF_DEVICE_IDS: Final = "device_ids"
-CONF_APP_CODE: Final = "app_code"
-CONF_LOGIN_NAME: Final = "login_name"
-CONF_AUTH_PASSWORD: Final = "auth_password"
+
+# 🔥 FIX IMPORTANT : doit correspondre EXACTEMENT à l'API
+CONF_APP_CODE: Final = "appCode"
+CONF_LOGIN_NAME: Final = "loginName"
+CONF_AUTH_PASSWORD: Final = "password"
+
 CONF_DEBUG: Final = "debug"
 
 # Valeurs par défaut
-DEFAULT_PORT: Final = 1883
 DEFAULT_APP_CODE: Final = "Storcube"
 
 # API BASE
 BASE_URL: Final = "http://baterway.com"
 
-# 🚨 FIX IMPORTANT : PAS DE QUERY STRING DANS LES CONST
 TOKEN_URL: Final = f"{BASE_URL}/api/user/app/login"
 DETAIL_URL: Final = f"{BASE_URL}/api/equip/detail"
 SCENE_URL: Final = f"{BASE_URL}/api/scene/user/list/V2"
