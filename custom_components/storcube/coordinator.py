@@ -5,29 +5,27 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.helpers.update_coordinator import (
-    DataUpdateCoordinator,
-)
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
 
 class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """StorCube coordinator (MQTT / WS ready, no polling)."""
+    """StorCube coordinator (MQTT / WS push only)."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         super().__init__(
             hass,
             _LOGGER,
             name="storcube",
-            update_interval=None,  # 🔥 push only
+            update_interval=None,  # push only
         )
 
         self.hass = hass
         self.entry = entry
 
-        # initial state
-        self._data: dict[str, Any] = {
+        # 🔥 IMPORTANT : utiliser self.data (pas self._data)
+        self.data: dict[str, Any] = {
             "soc": 0.0,
             "power": 0.0,
             "pv": 0.0,
@@ -38,31 +36,31 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self):
         """
         No polling mode.
-        Data is updated via MQTT / WebSocket callbacks.
+        Data updated only via update_from_ws().
         """
         return self.data
 
     # =========================================================
-    # MQTT / WS ENTRY POINT
+    # ENTRY POINT MQTT / WS
     # =========================================================
     def update_from_ws(self, payload: dict[str, Any]) -> None:
-        """Update coordinator from MQTT or WebSocket payload."""
+        """Push new data from MQTT / WebSocket."""
 
         try:
             # store raw payload
-            self._data["raw"] = payload
+            self.data["raw"] = payload
 
-            # safe float conversion
-            self._data["soc"] = self._to_float(payload.get("soc"))
-            self._data["power"] = self._to_float(payload.get("outputPower"))
-            self._data["pv"] = self._to_float(payload.get("pvPower"))
+            # values mapping
+            self.data["soc"] = self._to_float(payload.get("soc"))
+            self.data["power"] = self._to_float(payload.get("outputPower"))
+            self.data["pv"] = self._to_float(payload.get("pvPower"))
 
-            # online detection safe
+            # online detection
             online = payload.get("online") or payload.get("fgOnline")
-            self._data["online"] = str(online).lower() in ("1", "true", "yes", "on")
+            self.data["online"] = str(online).lower() in ("1", "true", "yes", "on")
 
-            # 🔥 push update to HA
-            self.async_set_updated_data(dict(self._data))
+            # 🔥 PUSH UPDATE TO HOME ASSISTANT
+            self.async_set_updated_data(dict(self.data))
 
         except Exception as err:
             _LOGGER.exception("StorCube parse error: %s", err)
@@ -71,7 +69,6 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # SAFE CONVERTER
     # =========================================================
     def _to_float(self, value: Any) -> float:
-        """Safe float conversion."""
         try:
             if value is None:
                 return 0.0
