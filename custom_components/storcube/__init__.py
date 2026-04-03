@@ -19,9 +19,6 @@ _LOGGER = logging.getLogger(__name__)
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 
 
-# =========================================================
-# SETUP ENTRY
-# =========================================================
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Storcube from a config entry."""
 
@@ -30,18 +27,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
 
     try:
-        # 🔥 CREATE COORDINATOR
         coordinator = StorCubeDataUpdateCoordinator(hass, entry)
 
         hass.data[DOMAIN][entry.entry_id] = {
             "coordinator": coordinator,
         }
 
-        # 🔥 FIRST REFRESH
         await coordinator.async_config_entry_first_refresh()
 
         # =========================================================
-        # 🔥 MQTT SUBSCRIPTION (FIX PRINCIPAL)
+        # MQTT SUBSCRIBE
         # =========================================================
         device_ids = entry.data.get(CONF_DEVICE_IDS, [])
 
@@ -49,23 +44,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             raise ConfigEntryNotReady("No device IDs configured")
 
         device_id = device_ids[0]
-
         topic = f"storcube/{device_id}/#"
 
         _LOGGER.warning("Subscribing to MQTT topic: %s", topic)
 
         async def message_received(msg):
             try:
+                if not msg.payload:
+                    return
+
                 payload = json.loads(msg.payload)
 
-                _LOGGER.debug("MQTT RECEIVED: %s", payload)
+                _LOGGER.debug("MQTT RECEIVED (%s): %s", topic, payload)
 
                 coordinator.update_from_ws(payload)
 
-            except Exception as err:
-                _LOGGER.error("MQTT parse error: %s", err)
+            except json.JSONDecodeError:
+                _LOGGER.error("Invalid JSON payload: %s", msg.payload)
 
-        await mqtt.async_subscribe(hass, topic, message_received)
+            except Exception as err:
+                _LOGGER.exception("MQTT parse error: %s", err)
+
+        unsubscribe = await mqtt.async_subscribe(
+            hass,
+            topic,
+            message_received,
+            qos=0,
+        )
+
+        # 🔥 important pour clean unload
+        hass.data[DOMAIN][entry.entry_id]["unsubscribe"] = unsubscribe
 
         # =========================================================
         # PLATFORMS
@@ -82,26 +90,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.exception("Unable to setup Storcube integration")
         raise ConfigEntryNotReady(f"Storcube setup failed: {err}") from err
 
-    # =========================================================
-    # SERVICES (OPTIONAL)
-    # =========================================================
-    try:
-        from .services import async_setup_services
-
-        await async_setup_services(hass)
-
-    except ImportError:
-        _LOGGER.debug("No services module found (skipping services)")
-
-    except Exception as err:
-        _LOGGER.exception("Error while setting up services: %s", err)
-
     return True
 
 
-# =========================================================
-# UNLOAD ENTRY
-# =========================================================
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload Storcube config entry."""
 
@@ -111,44 +102,17 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     if unload_ok:
-        domain_data = hass.data.get(DOMAIN)
+        entry_data = hass.data[DOMAIN].get(entry.entry_id)
 
-        if domain_data:
-            entry_data = domain_data.get(entry.entry_id)
+        if entry_data:
+            unsubscribe = entry_data.get("unsubscribe")
 
-            if entry_data:
-                coordinator = entry_data.get("coordinator")
+            if unsubscribe:
+                unsubscribe()
 
-                # 🔥 STOP WS TASK IF EXISTS
-                ws_task = getattr(coordinator, "_ws_task", None)
+            hass.data[DOMAIN].pop(entry.entry_id)
 
-                if ws_task:
-                    try:
-                        ws_task.cancel()
-                    except Exception:
-                        pass
-
-                domain_data.pop(entry.entry_id, None)
-
-        if not domain_data:
-            hass.data.pop(DOMAIN, None)
+        if not hass.data[DOMAIN]:
+            hass.data.pop(DOMAIN)
 
     return unload_ok
-
-
-# =========================================================
-# MIGRATION HANDLER
-# =========================================================
-async def async_migrate_entry(
-    hass: HomeAssistant,
-    config_entry: ConfigEntry,
-) -> bool:
-    """Handle config entry migrations."""
-
-    _LOGGER.debug(
-        "Migrating Storcube entry %s from version %s",
-        config_entry.entry_id,
-        config_entry.version,
-    )
-
-    return True
