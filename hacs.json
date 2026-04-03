@@ -2,10 +2,10 @@
   "domain": "storcube",
   "name": "Storcube",
   "version": "1.2.3",
-  "documentation": "https://github.com/jon7119/storcube_Ha",
-  "issue_tracker": "https://github.com/jon7119/storcube_Ha/issues",
+  "documentation": "https://github.com/jon7119/storcube",
+  "issue_tracker": "https://github.com/jon7119/storcube/issues",
   "dependencies": [],
-  "codeowners": ["@jon7119"],
+  "codeowners": ["@xez7082"],
   "requirements": [
     "aiohttp",
     "websockets"
