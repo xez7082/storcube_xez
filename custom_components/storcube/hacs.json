@@ -1,13 +1,12 @@
 {
-  "domain": "storcube_ha",
-  "name": "Storcube Battery Monitor",
-  "version": "1.0.0",
-  "documentation": "https://github.com/jon7119/storcube_Ha",
-  "issue_tracker": "https://github.com/jon7119/storcube_Ha/issues",
+  "domain": "storcube",
+  "name": "StorCube",
+  "version": "1.0.1",
+  "documentation": "https://github.com/jon7119/storcube",
+  "issue_tracker": "https://github.com/jon7119/storcube/issues",
   "dependencies": [],
-  "codeowners": ["@jon7119"],
+  "codeowners": ["xez7082"],
   "config_flow": true,
   "iot_class": "cloud_polling",
-  "requirements": ["aiohttp>=3.9.0"],
-  "homeassistant": "2025.7.4"
+  "requirements": ["aiohttp>=3.9.0,<4.0"]
 }
