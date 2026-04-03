@@ -1,4 +1,3 @@
-"""Constants for the Storcube integration."""
 from __future__ import annotations
 from typing import Final
 
@@ -20,12 +19,19 @@ DEFAULT_PORT: Final = 1883
 DEFAULT_APP_CODE: Final = "Storcube"
 
 # API Endpoints (Baterway / Storcube)
-# NOTE: Passage en http:// suite aux erreurs de timeout en https
 BASE_URL: Final = "http://baterway.com" 
 TOKEN_URL: Final = f"{BASE_URL}/api/user/app/login"
+
+# --- CRUCIAL : LES DEUX URLS DIFFÉRENTES ---
+# DETAIL_URL = Pour le SOC, le Solaire et la Puissance en temps réel
+DETAIL_URL: Final = f"{BASE_URL}/api/equip/detail?equipId="
+
+# SCENE_URL (anciennement OUTPUT_URL) = Pour voir les réglages programmés (70%, 150W)
+SCENE_URL: Final = f"{BASE_URL}/api/scene/user/list/V2?equipId="
+# --------------------------------------------
+
 WS_URI: Final = "ws://baterway.com:9501/equip/info/"
 FIRMWARE_URL: Final = f"{BASE_URL}/api/equip/version/need/upgrade?equipId="
-OUTPUT_URL: Final = f"{BASE_URL}/api/scene/user/list/V2?equipId="
 SET_POWER_URL: Final = f"{BASE_URL}/api/slb/equip/set/power"
 SET_THRESHOLD_URL: Final = f"{BASE_URL}/api/scene/threshold/set"
 
@@ -56,6 +62,5 @@ ATTR_FIRMWARE_UPGRADE_AVAILABLE: Final = "upgrade_available"
 ATTR_FIRMWARE_NOTES: Final = "firmware_notes"
 
 # Délais et Timeouts
-# Augmentation du timeout à 30s pour éviter les échecs de connexion sur serveurs lents
 SCAN_INTERVAL_SECONDS: Final = 30
 TIMEOUT_SECONDS: Final = 30
