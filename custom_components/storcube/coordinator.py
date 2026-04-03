@@ -18,14 +18,14 @@ from .const import (
     CONF_LOGIN_NAME,
     CONF_AUTH_PASSWORD,
     TOKEN_URL,
-    DETAIL_URL,
+    DETAIL_URL,  # Assure-toi que DETAIL_URL finit par /status dans const.py
     SCAN_INTERVAL_SECONDS,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
 class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Gère la récupération des données réelles via l'API Detail."""
+    """Gère la récupération des données via l'API Status."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         super().__init__(
@@ -48,7 +48,6 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
     def _safe_float(self, value: Any, default: float = 0.0) -> float:
-        """Convertit en float de manière sécurisée."""
         try:
             if value is None or value == "":
                 return default
@@ -57,67 +56,54 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return default
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Méthode principale de mise à jour."""
-        try:
-            if not self._auth_token:
-                await self.async_renew_token()
-            
-            await self._update_rest_data()
-            return dict(self.data)
-            
-        except ConfigEntryAuthFailed:
-            raise
-        except Exception as err:
-            _LOGGER.error("Erreur Storcube (%s) : %s", self._device_id, err)
-            raise UpdateFailed(f"Erreur de communication : {err}")
+        if not self._auth_token:
+            await self.async_renew_token()
+        
+        await self._update_rest_data()
+        return dict(self.data)
 
     async def async_renew_token(self):
-        """Authentification auprès de Baterway."""
         payload = {
             "appCode": self.entry.data.get(CONF_APP_CODE, "Storcube"),
             "loginName": self.entry.data[CONF_LOGIN_NAME],
             "password": self.entry.data[CONF_AUTH_PASSWORD]
         }
-        
         try:
             async with self.session.post(TOKEN_URL, json=payload, timeout=10) as resp:
                 res = await resp.json()
                 if resp.status == 200 and res.get("code") == 200:
                     self._auth_token = res["data"]["token"]
-                elif resp.status == 401:
-                    raise ConfigEntryAuthFailed("Identifiants incorrects")
                 else:
-                    raise UpdateFailed(f"Auth fail: {res.get('msg')}")
-        except asyncio.TimeoutError:
-            raise UpdateFailed("Timeout lors de l'auth")
+                    raise UpdateFailed(f"Auth failed: {res.get('msg')}")
+        except Exception as err:
+            raise UpdateFailed(f"Erreur connexion auth: {err}")
 
     def _extract_values(self, raw_data: dict[str, Any]):
-        """Mapping intelligent des données réelles."""
-        # Log en WARNING pour être sûr de voir passer les données dans la console HA
-        _LOGGER.warning("--- DONNÉES BRUTES REÇUES (ID: %s) ---", self._device_id)
+        """Extraction avec logs WARNING pour capture immédiate."""
+        _LOGGER.warning("--- CONTENU DU BLOC DATA (ID: %s) ---", self._device_id)
         _LOGGER.warning(raw_data)
         
         self.data["extra"] = raw_data
 
-        # 1. SOC (Niveau batterie)
-        # On teste les clés connues pour l'API Detail
-        soc_val = raw_data.get("soc") or raw_data.get("batteryLevel") or raw_data.get("reserved")
-        self.data["soc"] = self._safe_float(soc_val, self.data["soc"])
-
-        # 2. Puissance de sortie (W)
-        out_val = raw_data.get("outputPower") or raw_data.get("invPower") or raw_data.get("outPower")
-        self.data["power"] = self._safe_float(out_val, self.data["power"])
-
-        # 3. Solaire (W)
-        pv_val = raw_data.get("pvPower") or raw_data.get("pv1Power") or raw_data.get("ppv")
-        self.data["pv1"] = self._safe_float(pv_val, self.data["pv1"])
-
-        # 4. État
+        # Tentative sur plusieurs clés possibles
+        self.data["soc"] = self._safe_float(
+            raw_data.get("soc") or raw_data.get("batteryLevel") or raw_data.get("reserved"), 
+            self.data["soc"]
+        )
+        self.data["power"] = self._safe_float(
+            raw_data.get("outputPower") or raw_data.get("invPower") or raw_data.get("outPower"), 
+            self.data["power"]
+        )
+        self.data["pv1"] = self._safe_float(
+            raw_data.get("pvPower") or raw_data.get("pv1Power") or raw_data.get("ppv"), 
+            self.data["pv1"]
+        )
+        
         online = raw_data.get("fgOnline") or raw_data.get("mainEquipOnline")
         self.data["is_online"] = (str(online) == "1")
 
     async def _update_rest_data(self):
-        """Appel de l'API Detail."""
+        """Récupération via l'URL configurée."""
         if not self._auth_token:
             return
 
@@ -131,23 +117,21 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         
         try:
             async with self.session.get(url, headers=headers, timeout=15) as resp:
-                if resp.status == 200:
-                    res = await resp.json()
+                res = await resp.json()
+                
+                # LOG DE SÉCURITÉ : On affiche TOUTE la réponse, quoi qu'il arrive
+                _LOGGER.warning("REPONSE API COMPLETE (%s): %s", self._device_id, res)
+
+                if resp.status == 200 and res.get("code") == 200:
                     data_block = res.get("data")
-                    
                     if data_block:
-                        # Si c'est une liste, on prend le premier
                         if isinstance(data_block, list) and len(data_block) > 0:
                             self._extract_values(data_block[0])
-                        # Si c'est un dictionnaire direct
                         elif isinstance(data_block, dict):
                             self._extract_values(data_block)
                     else:
-                        _LOGGER.error("Réponse vide de l'API Detail pour %s", self._device_id)
-                
+                        _LOGGER.error("Le serveur répond 200 mais le champ 'data' est vide.")
                 elif resp.status == 401:
-                    _LOGGER.warning("Token expiré pour %s, renouvellement au prochain cycle", self._device_id)
                     self._auth_token = None
-                    
         except Exception as e:
-            _LOGGER.error("Erreur critique lors de l'appel Detail : %s", e)
+            _LOGGER.error("Erreur lors de la requête REST : %s", e)
