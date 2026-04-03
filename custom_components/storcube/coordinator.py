@@ -66,7 +66,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return default
 
     # -------------------------
-    # Main loop
+    # MAIN LOOP
     # -------------------------
     async def _async_update_data(self) -> dict[str, Any]:
         try:
@@ -143,7 +143,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.data["is_online"] = str(online) == "1"
 
     # -------------------------
-    # API CALL (FIX ROBUSTE)
+    # API CALL (FIX FINAL)
     # -------------------------
     async def _async_update_rest_data(self) -> None:
         if not self._auth_token:
@@ -154,23 +154,16 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "Content-Type": "application/json",
         }
 
-        # 🔥 IMPORTANT : on garde flexible (API chinoise variable)
-        params = {
-            # 👉 fallback logique (si equipId ne marche pas, changer ici)
-            "deviceId": self._device_id,
-        }
-
-        url = DETAIL_URL
+        # 🔥 FIX CRITIQUE : equipId doit être dans l'URL
+        url = f"{DETAIL_URL}?equipId={self._device_id}"
 
         _LOGGER.debug("REQUEST URL: %s", url)
-        _LOGGER.debug("REQUEST PARAMS: %s", params)
         _LOGGER.debug("REQUEST HEADERS: %s", headers)
 
         async with self.session.get(
             url,
             headers=headers,
-            params=params,
-            timeout=15,
+            timeout=15
         ) as resp:
 
             try:
@@ -180,26 +173,23 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             _LOGGER.debug("API RESPONSE (%s): %s", self._device_id, res)
 
+            # auth expired
             if resp.status == 401 or res.get("code") == 401:
                 self._auth_token = None
                 raise ConfigEntryAuthFailed("Auth failed / token expired")
 
+            # success
             if resp.status == 200 and res.get("code") == 200:
                 data_block = res.get("data")
 
-                # 🔥 FIX IMPORTANT : gérer None / [] / {}
-                if not data_block:
-                    _LOGGER.warning(
-                        "Empty data received for device_id=%s response=%s",
-                        self._device_id,
-                        res,
-                    )
+                # 🔥 IMPORTANT : API retourne parfois 0 / null
+                if not data_block or data_block == 0:
                     raise UpdateFailed(
                         f"Empty data field (device_id={self._device_id})"
                     )
 
                 if isinstance(data_block, list):
-                    if len(data_block) == 0:
+                    if not data_block:
                         raise UpdateFailed("Empty device list")
                     data_block = data_block[0]
 
