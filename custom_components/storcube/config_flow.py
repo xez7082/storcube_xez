@@ -31,28 +31,45 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             try:
+                login = user_input.get(CONF_LOGIN_NAME)
+                password = user_input.get(CONF_AUTH_PASSWORD)
+
+                # 🔥 FIX CRITIQUE: validation credentials
+                if not login or not password:
+                    errors["base"] = "invalid_auth"
+                    return self.async_show_form(
+                        step_id="user",
+                        data_schema=self._get_schema(),
+                        errors=errors,
+                    )
+
                 raw_ids = user_input.get(CONF_DEVICE_ID, "")
                 device_ids = [d.strip() for d in raw_ids.split(",") if d.strip()]
 
                 if not device_ids:
                     errors["base"] = "no_device"
-                else:
-                    # 🔥 FIX: unique_id plus stable et unique
-                    await self.async_set_unique_id(
-                        f"{user_input[CONF_LOGIN_NAME]}_{device_ids[0]}"
+                    return self.async_show_form(
+                        step_id="user",
+                        data_schema=self._get_schema(),
+                        errors=errors,
                     )
-                    self._abort_if_unique_id_configured()
 
-                    return self.async_create_entry(
-                        title=f"StorCube ({len(device_ids)} device{'s' if len(device_ids) > 1 else ''})",
-                        data={
-                            CONF_LOGIN_NAME: user_input[CONF_LOGIN_NAME],
-                            CONF_AUTH_PASSWORD: user_input[CONF_AUTH_PASSWORD],
-                            CONF_DEVICE_IDS: device_ids,
-                            CONF_APP_CODE: DEFAULT_APP_CODE,
-                            CONF_DEBUG: user_input.get(CONF_DEBUG, False),
-                        },
-                    )
+                # unique ID stable
+                await self.async_set_unique_id(
+                    f"{login}_{device_ids[0]}"
+                )
+                self._abort_if_unique_id_configured()
+
+                return self.async_create_entry(
+                    title=f"StorCube ({len(device_ids)} device{'s' if len(device_ids) > 1 else ''})",
+                    data={
+                        CONF_LOGIN_NAME: login,
+                        CONF_AUTH_PASSWORD: password,
+                        CONF_DEVICE_IDS: device_ids,
+                        CONF_APP_CODE: DEFAULT_APP_CODE,
+                        CONF_DEBUG: user_input.get(CONF_DEBUG, False),
+                    },
+                )
 
             except Exception as err:
                 _LOGGER.exception("Config flow error: %s", err)
@@ -60,21 +77,23 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_LOGIN_NAME): str,
-                    vol.Required(CONF_AUTH_PASSWORD): str,
-                    vol.Required(CONF_DEVICE_ID): str,  # "id1,id2"
-                    vol.Optional(CONF_DEBUG, default=False): bool,
-                }
-            ),
+            data_schema=self._get_schema(),
             errors=errors,
+        )
+
+    def _get_schema(self):
+        return vol.Schema(
+            {
+                vol.Required(CONF_LOGIN_NAME): str,
+                vol.Required(CONF_AUTH_PASSWORD): str,
+                vol.Required(CONF_DEVICE_ID): str,
+                vol.Optional(CONF_DEBUG, default=False): bool,
+            }
         )
 
     @staticmethod
     @callback
     def async_get_options_flow(entry):
-        """Options flow."""
         return StorcubeOptionsFlow(entry)
 
 
@@ -85,7 +104,6 @@ class StorcubeOptionsFlow(config_entries.OptionsFlow):
         self.entry = entry
 
     async def async_step_init(self, user_input=None):
-        """Manage options."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
@@ -101,7 +119,6 @@ class StorcubeOptionsFlow(config_entries.OptionsFlow):
                         ),
                     ): bool,
 
-                    # 🔥 FIX: allow device update (important)
                     vol.Optional(
                         CONF_DEVICE_ID,
                         default=",".join(self.entry.data.get(CONF_DEVICE_IDS, [])),
