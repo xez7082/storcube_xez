@@ -40,9 +40,14 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.session = async_get_clientsession(hass)
         self._auth_token: str | None = None
 
-        device_ids = entry.data.get(CONF_DEVICE_IDS, [])
+        # 🔥 SAFE DEVICE IDS HANDLING
+        device_ids = entry.data.get(CONF_DEVICE_IDS)
+
         if not device_ids:
             raise ValueError("No device IDs configured")
+
+        if isinstance(device_ids, str):
+            device_ids = [device_ids]
 
         self._device_id = str(device_ids[0]).strip()
 
@@ -92,10 +97,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
         async with self.session.post(TOKEN_URL, json=payload, timeout=10) as resp:
-            try:
-                res = await resp.json()
-            except Exception:
-                raise UpdateFailed("Invalid JSON from token endpoint")
+            res = await resp.json()
 
             _LOGGER.debug("TOKEN RESPONSE: %s", res)
 
@@ -143,7 +145,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.data["is_online"] = str(online) == "1"
 
     # -------------------------
-    # API CALL (FIX FINAL PROPRE)
+    # API CALL (FINAL FIX CLEAN)
     # -------------------------
     async def _async_update_rest_data(self) -> None:
         if not self._auth_token:
@@ -154,16 +156,11 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "Content-Type": "application/json",
         }
 
-        # ✅ FIX PROPRE : PAS de concat URL
         url = DETAIL_URL
-
-        params = {
-            "equipId": self._device_id
-        }
+        params = {"equipId": self._device_id}
 
         _LOGGER.debug("REQUEST URL: %s", url)
         _LOGGER.debug("REQUEST PARAMS: %s", params)
-        _LOGGER.debug("REQUEST HEADERS: %s", headers)
 
         async with self.session.get(
             url,
@@ -172,27 +169,26 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             timeout=15,
         ) as resp:
 
-            try:
-                res = await resp.json()
-            except Exception:
-                raise UpdateFailed("Invalid JSON in API response")
+            res = await resp.json()
 
             _LOGGER.debug("API RESPONSE (%s): %s", self._device_id, res)
 
             # AUTH EXPIRED
             if resp.status == 401 or res.get("code") == 401:
                 self._auth_token = None
-                raise ConfigEntryAuthFailed("Auth failed / expired token")
+                raise ConfigEntryAuthFailed("Token expired")
 
             # SUCCESS
             if resp.status == 200 and res.get("code") == 200:
                 data_block = res.get("data")
 
-                # 🔥 FIX IMPORTANT : API retourne 0 / None / []
+                # 🔥 IMPORTANT FIX: retry instead of crash
                 if data_block in (None, 0, "", []):
-                    raise UpdateFailed(
-                        f"Empty data field (device_id={self._device_id})"
+                    _LOGGER.warning(
+                        "Empty data received for device %s (retry later)",
+                        self._device_id,
                     )
+                    raise UpdateFailed("Empty API data")
 
                 if isinstance(data_block, list):
                     data_block = data_block[0] if data_block else None
