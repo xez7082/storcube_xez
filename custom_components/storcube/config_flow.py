@@ -1,56 +1,72 @@
-"""Config flow for Storcube integration."""
 from __future__ import annotations
 
 import voluptuous as vol
 from homeassistant import config_entries
-import homeassistant.helpers.config_validation as cv
+from homeassistant.core import callback
 
-# On importe les constantes
-from .const import (
-    DOMAIN, 
-    CONF_DEVICE_ID, 
-    CONF_LOGIN_NAME, 
-    CONF_AUTH_PASSWORD,
-    CONF_APP_CODE,       # Assurez-vous que c'est dans const.py
-    DEFAULT_APP_CODE     # Assurez-vous que c'est dans const.py
-)
+from .const import *
 
 class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Gère le flux de configuration pour Storcube."""
-
-    VERSION = 1
+    VERSION = 2
 
     async def async_step_user(self, user_input=None):
-        """Étape initiale lors de l'ajout manuel par l'utilisateur."""
         errors = {}
 
         if user_input is not None:
-            # 1. Vérification : empêcher les doublons
-            await self.async_set_unique_id(user_input[CONF_DEVICE_ID])
-            self._abort_if_unique_id_configured()
+            raw_ids = user_input[CONF_DEVICE_ID]
+            device_ids = [d.strip() for d in raw_ids.split(",") if d.strip()]
 
-            # 2. Injection automatique de app_code pour éviter l'erreur KeyError
-            # On copie les entrées utilisateur et on ajoute la valeur manquante
-            data = user_input.copy()
-            data[CONF_APP_CODE] = DEFAULT_APP_CODE 
+            if not device_ids:
+                errors["base"] = "no_device"
+            else:
+                await self.async_set_unique_id(user_input[CONF_LOGIN_NAME])
+                self._abort_if_unique_id_configured()
 
-            # 3. Création de l'entrée
-            return self.async_create_entry(
-                title=f"Storcube {user_input[CONF_DEVICE_ID]}",
-                data=data
-            )
-
-        # Schéma du formulaire (sans app_code pour simplifier la vie de l'utilisateur)
-        DATA_SCHEMA = vol.Schema({
-            vol.Required(CONF_LOGIN_NAME): str,
-            vol.Required(CONF_AUTH_PASSWORD): str,
-            vol.Required(CONF_DEVICE_ID): str,
-            vol.Optional("host"): str,
-            vol.Optional("port", default=1883): cv.port,
-        })
+                return self.async_create_entry(
+                    title=f"StorCube ({len(device_ids)} devices)",
+                    data={
+                        CONF_LOGIN_NAME: user_input[CONF_LOGIN_NAME],
+                        CONF_AUTH_PASSWORD: user_input[CONF_AUTH_PASSWORD],
+                        CONF_DEVICE_IDS: device_ids,
+                        CONF_APP_CODE: DEFAULT_APP_CODE,
+                        CONF_DEBUG: user_input.get(CONF_DEBUG, False),
+                    },
+                )
 
         return self.async_show_form(
             step_id="user",
-            data_schema=DATA_SCHEMA,
-            errors=errors
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_LOGIN_NAME): str,
+                    vol.Required(CONF_AUTH_PASSWORD): str,
+                    vol.Required(CONF_DEVICE_ID): str,
+                    vol.Optional(CONF_DEBUG, default=False): bool,
+                }
+            ),
+            errors=errors,
+        )
+
+    @callback
+    def async_get_options_flow(self, entry):
+        return StorcubeOptionsFlow(entry)
+
+
+class StorcubeOptionsFlow(config_entries.OptionsFlow):
+    def __init__(self, entry):
+        self.entry = entry
+
+    async def async_step_init(self, user_input=None):
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_DEBUG,
+                        default=self.entry.data.get(CONF_DEBUG, False),
+                    ): bool,
+                }
+            ),
         )
