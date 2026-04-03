@@ -23,7 +23,7 @@ DEFAULT_APP_CODE: Final = "Storcube"
 # API BASE
 BASE_URL: Final = "http://baterway.com"
 
-# 🚨 FIX IMPORTANT : PAS DE QUERY STRING ICI
+# 🚨 FIX IMPORTANT : PAS DE QUERY STRING DANS LES CONST
 TOKEN_URL: Final = f"{BASE_URL}/api/user/app/login"
 DETAIL_URL: Final = f"{BASE_URL}/api/equip/detail"
 SCENE_URL: Final = f"{BASE_URL}/api/scene/user/list/V2"
@@ -31,7 +31,7 @@ FIRMWARE_URL: Final = f"{BASE_URL}/api/equip/version/need/upgrade"
 SET_POWER_URL: Final = f"{BASE_URL}/api/slb/equip/set/power"
 SET_THRESHOLD_URL: Final = f"{BASE_URL}/api/scene/threshold/set"
 
-# WS
+# WebSocket
 WS_URI: Final = "ws://baterway.com:9501/equip/info/"
 
 # MQTT Topics
