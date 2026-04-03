@@ -4,6 +4,8 @@ import logging
 from datetime import timedelta
 from typing import Any
 
+import aiohttp
+
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.update_coordinator import (
@@ -38,9 +40,10 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         self.entry = entry
         self.session = async_get_clientsession(hass)
+
         self._auth_token: str | None = None
 
-        # 🔥 SAFE DEVICE IDS HANDLING
+        # 🔥 SAFE DEVICE IDS
         device_ids = entry.data.get(CONF_DEVICE_IDS)
 
         if not device_ids:
@@ -64,7 +67,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # -------------------------
     def _safe_float(self, value: Any, default: float = 0.0) -> float:
         try:
-            if value in (None, ""):
+            if value in (None, "", "null"):
                 return default
             return float(value)
         except (ValueError, TypeError):
@@ -92,11 +95,16 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_renew_token(self) -> None:
         payload = {
             "appCode": self.entry.data.get(CONF_APP_CODE, "Storcube"),
-            "loginName": self.entry.data[CONF_LOGIN_NAME],
-            "password": self.entry.data[CONF_AUTH_PASSWORD],
+            "loginName": self.entry.data.get(CONF_LOGIN_NAME),
+            "password": self.entry.data.get(CONF_AUTH_PASSWORD),
         }
 
-        async with self.session.post(TOKEN_URL, json=payload, timeout=10) as resp:
+        async with self.session.post(
+            TOKEN_URL,
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+
             res = await resp.json()
 
             _LOGGER.debug("TOKEN RESPONSE: %s", res)
@@ -107,7 +115,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if resp.status == 200 and res.get("code") == 200:
                 token = (res.get("data") or {}).get("token")
                 if not token:
-                    raise UpdateFailed("Token missing in response")
+                    raise UpdateFailed("Token missing")
 
                 self._auth_token = str(token).strip()
                 return
@@ -115,7 +123,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(f"Auth failed: {res}")
 
     # -------------------------
-    # DATA PARSING
+    # PARSING
     # -------------------------
     def _extract_values(self, raw_data: dict[str, Any]) -> None:
         self.data["extra"] = raw_data
@@ -142,10 +150,10 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
         online = raw_data.get("fgOnline") or raw_data.get("mainEquipOnline")
-        self.data["is_online"] = str(online) == "1"
+        self.data["is_online"] = str(online) in ("1", "true", "True")
 
     # -------------------------
-    # API CALL (FINAL FIX CLEAN)
+    # API CALL
     # -------------------------
     async def _async_update_rest_data(self) -> None:
         if not self._auth_token:
@@ -153,50 +161,53 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         headers = {
             "Authorization": self._auth_token,
-            "Content-Type": "application/json",
         }
 
-        url = DETAIL_URL
         params = {"equipId": self._device_id}
 
-        _LOGGER.debug("REQUEST URL: %s", url)
+        _LOGGER.debug("REQUEST URL: %s", DETAIL_URL)
         _LOGGER.debug("REQUEST PARAMS: %s", params)
 
-        async with self.session.get(
-            url,
-            headers=headers,
-            params=params,
-            timeout=15,
-        ) as resp:
+        try:
+            async with self.session.get(
+                DETAIL_URL,
+                headers=headers,
+                params=params,
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
 
-            res = await resp.json()
+                res = await resp.json()
 
-            _LOGGER.debug("API RESPONSE (%s): %s", self._device_id, res)
+        except aiohttp.ClientError as err:
+            raise UpdateFailed(f"HTTP error: {err}") from err
 
-            # AUTH EXPIRED
-            if resp.status == 401 or res.get("code") == 401:
-                self._auth_token = None
-                raise ConfigEntryAuthFailed("Token expired")
+        _LOGGER.debug("API RESPONSE (%s): %s", self._device_id, res)
 
-            # SUCCESS
-            if resp.status == 200 and res.get("code") == 200:
-                data_block = res.get("data")
+        # AUTH EXPIRED
+        if resp.status == 401 or res.get("code") == 401:
+            self._auth_token = None
+            raise ConfigEntryAuthFailed("Token expired")
 
-                # 🔥 IMPORTANT FIX: retry instead of crash
-                if data_block in (None, 0, "", []):
-                    _LOGGER.warning(
-                        "Empty data received for device %s (retry later)",
-                        self._device_id,
-                    )
-                    raise UpdateFailed("Empty API data")
+        # SUCCESS
+        if resp.status == 200 and res.get("code") == 200:
+            data_block = res.get("data")
 
-                if isinstance(data_block, list):
-                    data_block = data_block[0] if data_block else None
+            # 🔥 FIX IMPORTANT : ne pas crash coordinator pour data=0
+            if data_block in (None, "", []):
+                _LOGGER.warning(
+                    "Empty API data (device=%s) -> keep previous state",
+                    self._device_id,
+                )
+                return
 
-                if isinstance(data_block, dict):
-                    self._extract_values(data_block)
-                    return
+            if isinstance(data_block, list):
+                data_block = data_block[0] if data_block else None
 
-                raise UpdateFailed(f"Invalid data format: {data_block}")
+            if isinstance(data_block, dict):
+                self._extract_values(data_block)
+                return
 
-            raise UpdateFailed(f"API error: {res}")
+            _LOGGER.warning("Unexpected data format: %s", data_block)
+            return
+
+        raise UpdateFailed(f"API error: {res}")
