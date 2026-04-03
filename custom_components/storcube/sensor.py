@@ -16,7 +16,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-# Importation des constantes pour éviter les erreurs de frappe
+# Importation des constantes
 from .const import DOMAIN, CONF_DEVICE_ID
 
 _LOGGER = logging.getLogger(__name__)
@@ -28,14 +28,13 @@ class StorcubeBaseSensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, entry):
         super().__init__(coordinator)
         self._entry = entry
-        # Utilisation de la constante CONF_DEVICE_ID pour la cohérence
         self._device_id = str(entry.data.get(CONF_DEVICE_ID, "unknown")).strip()
         
         self._attr_device_info = {
             "identifiers": {(DOMAIN, self._device_id)},
             "name": f"Storcube {self._device_id}",
             "manufacturer": "Storcube",
-            "model": "S1000", # Optionnel: peut être récupéré via coordinator.data["extra"].get("equipModelCode")
+            "model": "S1000",
         }
 
 class StorcubeBatteryLevelSensor(StorcubeBaseSensor):
@@ -51,7 +50,6 @@ class StorcubeBatteryLevelSensor(StorcubeBaseSensor):
 
     @property
     def native_value(self):
-        """Récupère le SOC (70 dans tes logs)."""
         return self.coordinator.data.get("soc")
 
 class StorcubeBatteryPowerSensor(StorcubeBaseSensor):
@@ -67,7 +65,6 @@ class StorcubeBatteryPowerSensor(StorcubeBaseSensor):
 
     @property
     def native_value(self):
-        """Récupère l'outputPower (150 dans tes logs)."""
         return self.coordinator.data.get("power")
 
 class StorcubeSolarPowerSensor(StorcubeBaseSensor):
@@ -84,9 +81,23 @@ class StorcubeSolarPowerSensor(StorcubeBaseSensor):
 
     @property
     def native_value(self):
-        """Récupère PV1 ou PV2."""
         val = self.coordinator.data.get(f"pv{self._pv_index}")
         return val if val is not None else 0
+
+class StorcubeTemperatureSensor(StorcubeBaseSensor):
+    """Température (°C)."""
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry)
+        self._attr_name = "Température"
+        self._attr_unique_id = f"{self._device_id}_temperature"
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("temp")
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -95,12 +106,10 @@ async def async_setup_entry(
 ) -> None:
     """Configuration des capteurs Storcube."""
     
-    # On récupère le coordinateur depuis hass.data
-    # Note : Assure-toi que dans __init__.py tu as bien stocké le coordinateur ainsi
     try:
         coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     except KeyError:
-        _LOGGER.error("Le coordinateur Storcube n'est pas disponible pour l'entrée %s", entry.entry_id)
+        _LOGGER.error("Le coordinateur Storcube n'est pas disponible pour %s", entry.entry_id)
         return
 
     # Liste des capteurs à créer
@@ -110,8 +119,10 @@ async def async_setup_entry(
         StorcubeSolarPowerSensor(coordinator, entry, "1"),
     ]
 
-    # Ajout du capteur de température si la donnée existe (facultatif)
-    if self.coordinator.data.get("temp") is not None:
+    # CORRECTION : Utilisation de 'coordinator' au lieu de 'self.coordinator'
+    # On ajoute la température seulement si elle est présente et cohérente
+    temp_val = coordinator.data.get("temp")
+    if temp_val is not None and temp_val != 0:
          sensors.append(StorcubeTemperatureSensor(coordinator, entry))
 
     async_add_entities(sensors)
