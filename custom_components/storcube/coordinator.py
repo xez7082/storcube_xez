@@ -28,7 +28,7 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Coordinateur avec fonction de découverte pour résoudre le problème 'data: 0'."""
+    """Coordinateur optimisé pour l'extraction des IDs réels."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         super().__init__(
@@ -62,33 +62,40 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 response = await session.post(TOKEN_URL, json=payload)
                 res_data = await response.json()
                 token = res_data.get("data", {}).get("token")
-                if token:
-                    return str(token)
-                return None
+                return str(token) if token else None
         except Exception:
-            _LOGGER.exception("Erreur lors de la récupération du token")
+            _LOGGER.exception("Erreur Token")
             return None
 
     async def _async_discover_devices(self):
-        """Récupère la liste réelle des équipements pour trouver le bon ID."""
-        url = "http://baterway.com/api/equip/user/list"
-        headers = {"token": self._token}
-        try:
-            session = async_get_clientsession(self.hass)
-            async with session.get(url, headers=headers) as resp:
-                data = await resp.json()
-                _LOGGER.error("--- DISCOVERY : Liste des IDs valides sur ce compte ---")
-                _LOGGER.error(data)
-                _LOGGER.error("-------------------------------------------------------")
-        except Exception as err:
-            _LOGGER.error("Erreur découverte : %s", err)
+        """Sonde les endpoints pour trouver les IDs valides."""
+        # On essaie les deux endpoints de liste connus
+        for path in ["/api/equip/user/list", "/api/equip/list"]:
+            url = f"http://baterway.com{path}"
+            headers = {"token": self._token}
+            try:
+                session = async_get_clientsession(self.hass)
+                async with session.get(url, headers=headers, timeout=10) as resp:
+                    res = await resp.json()
+                    devices = res.get("data", [])
+                    if isinstance(devices, list) and len(devices) > 0:
+                        _LOGGER.error(f"--- DÉCOUVERTE VIA {path} ---")
+                        for d in devices:
+                            # On logge uniquement le strict nécessaire pour éviter les coupures
+                            d_id = d.get('id')
+                            d_sn = d.get('deviceSn')
+                            d_name = d.get('aliasName') or d.get('deviceName')
+                            _LOGGER.error(f"TROUVÉ: [{d_name}] ID: {d_id} | SN: {d_sn}")
+                        _LOGGER.error("----------------------------------")
+                        return # On s'arrête si on a trouvé
+            except Exception:
+                continue
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Mise à jour des données."""
+        """Polling des données."""
         if not self._token:
             self._token = await self._async_get_token()
             if self._token:
-                # On lance la découverte une seule fois pour voir les vrais IDs dans les logs
                 await self._async_discover_devices()
             else:
                 return self.data
@@ -102,18 +109,15 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 response = await session.get(url, headers=headers)
                 payload = await response.json()
                 
-                # Debug de la réponse
-                _LOGGER.debug("Réponse pour %s: %s", self._device_id, payload)
-
                 data_part = payload.get("data")
                 if isinstance(data_part, dict):
                     self._parse_payload(data_part)
                 else:
-                    _LOGGER.warning("L'ID %s renvoie 'data: 0'. Vérifiez les logs ERROR pour l'ID correct.", self._device_id)
+                    _LOGGER.debug(f"ID {self._device_id} incorrect (data: 0). Utilise l'ID ou SN trouvé dans les logs ERROR.")
                 
                 return self.data
         except Exception as err:
-            _LOGGER.debug("Erreur API : %s", err)
+            _LOGGER.debug("Erreur polling: %s", err)
             return self.data
 
     def update_from_ws(self, payload: dict[str, Any]) -> None:
