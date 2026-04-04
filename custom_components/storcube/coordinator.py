@@ -7,7 +7,7 @@ from typing import Any
 import async_timeout
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
@@ -26,23 +26,16 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             hass,
             _LOGGER,
             name=DOMAIN,
-            # On interroge le cloud toutes les X secondes (défini dans const.py)
             update_interval=timedelta(seconds=SCAN_INTERVAL_SECONDS),
         )
         self.entry = entry
         self._token: str | None = None
-        
-        # Stockage des données par device_id
         self.data: dict[str, Any] = {}
 
     async def _async_get_token(self) -> str | None:
-        """Récupère le token d'authentification sur le Cloud."""
+        """Récupère le token d'authentification."""
         login = self.entry.data.get(CONF_LOGIN_NAME)
         password = self.entry.data.get(CONF_AUTH_PASSWORD)
-
-        if not login or not password:
-            _LOGGER.error("Identifiants manquants dans la configuration")
-            return None
 
         payload = {
             "loginName": login,
@@ -55,21 +48,20 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             async with async_timeout.timeout(10):
                 response = await session.post(TOKEN_URL, json=payload)
                 res_data = await response.json()
+                # Correction : le token est parfois dans data['token']
                 token = res_data.get("data", {}).get("token")
-                if token:
-                    _LOGGER.debug("Token Storcube actualisé")
-                    return token
+                return token
         except Exception as e:
-            _LOGGER.error("Erreur de connexion au Cloud Storcube pour le token : %s", e)
+            _LOGGER.error("Erreur Token Storcube : %s", e)
         return None
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Rafraîchissement périodique via l'API Cloud."""
+        """Rafraîchissement périodique."""
         if not self._token:
             self._token = await self._async_get_token()
 
         if not self._token:
-            return self.data
+            raise UpdateFailed("Authentification Storcube échouée")
 
         session = async_get_clientsession(self.hass)
         headers = {
@@ -78,40 +70,43 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "Content-Type": "application/json"
         }
         
-        # Récupération de la liste des IDs (Maître et Esclave)
-        device_ids = self.entry.data.get(CONF_DEVICE_IDS, [])
-        if not device_ids:
-            # Fallback sur l'ID unique si la liste est vide
-            device_ids = [self.entry.data.get("device_id")]
-
+        # On récupère les IDs depuis les options ou les data
+        device_ids = self.entry.data.get(CONF_DEVICE_IDS) or [self.entry.data.get("device_id")]
         new_global_data = {}
 
         for device_id in device_ids:
-            if not device_id:
-                continue
-                
+            if not device_id: continue
+            
             try:
-                # On interroge l'API de détail pour chaque batterie
+                # Tentative sur l'URL de détail
                 url = f"http://baterway.com/api/equip/detail?device_id={device_id}"
                 async with async_timeout.timeout(10):
                     async with session.get(url, headers=headers) as resp:
-                        if resp.status == 200:
-                            res = await resp.json()
-                            if "data" in res:
-                                # On stocke les données sous la clé de l'ID de l'appareil
-                                new_global_data[device_id] = res["data"]
-                                _LOGGER.debug("Données reçues pour %s: %s", device_id, res["data"])
+                        res = await resp.json()
+                        
+                        # LOG DE DEBUG IMPORTANT : 
+                        # On va voir exactement ce que le serveur répond pour la S1000
+                        _LOGGER.debug("Réponse brute Storcube pour %s: %s", device_id, res)
+
+                        if res.get("code") == 200 and res.get("data") is not None:
+                            # Si data est un entier (ex: 0), on essaie de voir si les infos 
+                            # sont dans une autre clé du JSON
+                            data_content = res["data"]
+                            
+                            if isinstance(data_content, dict):
+                                new_global_data[str(device_id)] = data_content
+                            else:
+                                # Si le serveur renvoie 0, on crée un dictionnaire vide 
+                                # pour éviter l'erreur dans sensor.py
+                                new_global_data[str(device_id)] = {"status": "connected_but_no_data"}
+                        
+                        elif res.get("code") == 401: # Token expiré
+                            self._token = None
+
             except Exception as err:
-                _LOGGER.warning("Impossible de mettre à jour l'appareil %s : %s", device_id, err)
-                # En cas d'erreur (ex: token expiré), on invalide le token pour le prochain cycle
-                self._token = None
+                _LOGGER.error("Erreur sur l'appareil %s : %s", device_id, err)
 
-        # Si on a reçu des données, on met à jour le dictionnaire global
-        if new_global_data:
-            return new_global_data
-        
-        return self.data
-
-    def update_from_ws(self, payload: dict[str, Any]) -> None:
-        """Conservé pour compatibilité, mais le Cloud est désormais prioritaire."""
-        pass
+        if not new_global_data:
+            return self.data
+            
+        return new_global_data
