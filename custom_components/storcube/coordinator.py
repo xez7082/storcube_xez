@@ -29,6 +29,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.data = {"soc": 0.0, "power": 0.0, "pv": 0.0, "online": False, ATTR_EXTRA_STATE: {}}
 
     async def _async_get_token(self) -> str | None:
+        """Récupère le token d'authentification."""
         payload = {
             "loginName": self.entry.data.get(CONF_LOGIN_NAME),
             "password": self.entry.data.get(CONF_AUTH_PASSWORD),
@@ -40,54 +41,56 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 response = await session.post(TOKEN_URL, json=payload)
                 res_data = await response.json()
                 return res_data.get("data", {}).get("token")
-        except Exception:
+        except Exception as e:
+            _LOGGER.error("Erreur de token : %s", e)
             return None
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Scan des structures Home/Family/Device pour trouver l'ID."""
+        """Scan des domaines Baterway et Storcube pour trouver tes appareils."""
         if not self._token:
             self._token = await self._async_get_token()
 
         if not self._token:
             raise Exception("Échec d'authentification.")
 
-        # On teste les structures résidentielles (Family / Home / Device)
-        paths_to_test = [
-            "/api/family/list",
-            "/api/home/list",
-            "/api/device/list",
-            "/api/slb/family/list",
-            "/api/app/home/list"
+        # On teste les deux domaines possibles avec les endpoints les plus courants
+        scanners = [
+            {"base": "http://api.storcube.com", "path": "/api/device/list"},
+            {"base": "http://api.storcube.com", "path": "/api/equip/list"},
+            {"base": "http://api.storcube.com", "path": "/api/station/list"},
+            {"base": "http://baterway.com", "path": "/api/device/list"},
+            {"base": "http://baterway.com", "path": "/api/equip/list"},
         ]
         
         session = async_get_clientsession(self.hass)
         scan_results = []
 
-        for path in paths_to_test:
-            url = f"http://baterway.com{path}"
+        for scan in scanners:
+            url = f"{scan['base']}{scan['path']}"
             try:
-                async with session.get(url, headers={"token": self._token}, timeout=5) as resp:
+                # Ajout des headers complets pour simuler l'App
+                headers = {"token": self._token, "appCode": "Storcube"}
+                async with session.get(url, headers=headers, timeout=5) as resp:
                     res = await resp.json()
                     data_raw = res.get("data", [])
                     
-                    # On fouille partout : data directe ou data.list
+                    # On cherche une liste d'appareils
                     items = data_raw if isinstance(data_raw, list) else data_raw.get("list", []) if isinstance(data_raw, dict) else []
                     
                     if items and len(items) > 0:
                         output = []
                         for i in items:
-                            # On tente de trouver n'importe quel ID d'objet
-                            oid = i.get('id') or i.get('homeId') or i.get('familyId') or i.get('deviceSn')
-                            name = i.get('name') or i.get('homeName') or i.get('aliasName') or "Appareil"
+                            oid = i.get('id') or i.get('deviceSn') or i.get('sn')
+                            name = i.get('aliasName') or i.get('deviceName') or "Batterie"
                             output.append(f"[{name}: ID={oid}]")
                         
                         final_msg = " / ".join(output)
-                        _LOGGER.error("!!! SCAN REUSSI SUR %s !!!", path)
+                        _LOGGER.error("!!! VICTOIRE SUR %s !!!", url)
                         raise Exception(f"TES IDENTIFIANTS REELS SONT ICI -> {final_msg}")
                     
-                    scan_results.append(f"{path}: {resp.status} (Vide)")
+                    scan_results.append(f"{scan['path']}: {resp.status}")
             except Exception as e:
                 if "TES IDENTIFIANTS" in str(e): raise e
-                scan_results.append(f"{path}: Erreur {type(e).__name__}")
+                scan_results.append(f"{url}: Err")
 
-        raise Exception(f"ECHEC SCAN RESIDENTIEL. Résultats : {', '.join(scan_results)}")
+        raise Exception(f"AUCUN APPAREIL TROUVE. Resultats : {', '.join(scan_results[:4])}")
