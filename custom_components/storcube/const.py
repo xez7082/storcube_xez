@@ -1,5 +1,6 @@
 from __future__ import annotations
 from typing import Final
+from datetime import timedelta
 
 # =========================================================
 # BASE INFO
@@ -13,7 +14,7 @@ DEVELOPER: Final = "xez7082"
 # =========================================================
 # CONFIG KEYS
 # =========================================================
-# On garde les deux pour la transition entre les versions de l'intégration
+# Double gestion pour assurer la transition sans erreur
 CONF_DEVICE_ID: Final = "device_id"
 CONF_DEVICE_IDS: Final = "device_ids" 
 
@@ -44,7 +45,7 @@ DEFAULT_MQTT_TOPIC: Final = "storcube/{device_id}/#"
 BASE_URL: Final = "http://baterway.com"
 
 TOKEN_URL: Final = f"{BASE_URL}/api/user/app/login"
-# URLs avec paramètre prêt pour l'ID
+# URLs formatées pour recevoir directement l'ID à la suite
 DETAIL_URL: Final = f"{BASE_URL}/api/equip/detail?equipId="
 STATUS_URL: Final = f"{BASE_URL}/api/equip/status?equipId="
 SCENE_URL: Final = f"{BASE_URL}/api/scene/user/list/V2?equipId="
@@ -54,15 +55,14 @@ SET_POWER_URL: Final = f"{BASE_URL}/api/slb/equip/set/power"
 SET_THRESHOLD_URL: Final = f"{BASE_URL}/api/scene/threshold/set"
 
 # =========================================================
-# PAYLOAD MAPPING
+# PAYLOAD MAPPING (Clés JSON Batterie)
 # =========================================================
-# Clés utilisées pour extraire les données du JSON (Cloud ou MQTT)
 PAYLOAD_KEY_SOC: Final = "soc"
 PAYLOAD_KEY_POWER: Final = "outputPower"
 PAYLOAD_KEY_PV: Final = "pvPower"
 PAYLOAD_KEY_ONLINE: Final = "online"
 
-# Clé de stockage interne pour les attributs
+# Clé pour les attributs étendus
 ATTR_EXTRA_STATE: Final = "extra"
 
 # =========================================================
@@ -74,3 +74,6 @@ ICON_SOLAR: Final = "mdi:solar-power"
 
 SCAN_INTERVAL_SECONDS: Final = 30
 TIMEOUT_SECONDS: Final = 15
+
+# Intervalle formaté pour le coordinateur
+MIN_TIME_BETWEEN_UPDATES = timedelta(seconds=SCAN_INTERVAL_SECONDS)
