@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import time
 from datetime import timedelta
 from typing import Any
 
@@ -30,17 +29,17 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.data: dict[str, Any] = {}
 
     async def _async_get_token(self) -> str | None:
-        """Authentification mise à jour 2026."""
+        """Auth sur le serveur global (plus fiable au niveau DNS)."""
         login = self.entry.data.get(CONF_LOGIN_NAME)
         password = self.entry.data.get(CONF_AUTH_PASSWORD)
         
-        # URL de login mise à jour
-        url = "https://api-eu.baterway.com/api/login/login"
+        # URL globale (Net est souvent plus stable que EU)
+        url = "https://api.baterway.net/api/login/login"
         payload = {
             "loginName": login,
             "password": password,
             "appCode": "Storcube",
-            "terminalType": "1" # Important pour simuler l'app mobile
+            "terminalType": "1"
         }
         
         session = async_get_clientsession(self.hass)
@@ -49,15 +48,13 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 response = await session.post(url, json=payload)
                 res_data = await response.json()
                 token = res_data.get("data", {}).get("token")
-                if token:
-                    _LOGGER.debug("Authentification réussie")
                 return token
         except Exception as e:
-            _LOGGER.error("Échec auth Storcube : %s", e)
+            _LOGGER.error("Erreur Auth (DNS/Net) : %s", e)
         return None
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Récupération des données S1000 (Correctif Février 2026)."""
+        """Récupération via Endpoint 2026 sur serveur Global."""
         if not self._token:
             self._token = await self._async_get_token()
 
@@ -65,11 +62,9 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return self.data
 
         session = async_get_clientsession(self.hass)
-        # Headers renforcés pour simuler l'application officielle
         headers = {
             "token": self._token, 
             "appCode": "Storcube",
-            "lang": "fr",
             "Content-Type": "application/json"
         }
         
@@ -78,31 +73,28 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for device_id in device_ids:
             if not device_id: continue
 
-            # DEPUIS FÉVRIER 2026 : L'URL est passée en /device/ et utilise deviceSn
-            url = f"https://api-eu.baterway.com/api/device/getDeviceDetail?deviceSn={device_id}"
+            # On tente l'endpoint qui a remplacé celui de Jon7119 en février
+            url = f"https://api.baterway.net/api/device/getDeviceDetail?deviceSn={device_id}"
             
             try:
                 async with async_timeout.timeout(10):
                     async with session.get(url, headers=headers) as resp:
                         res = await resp.json()
-                        
-                        # LOG CRITIQUE : Pour voir si on a enfin autre chose que 0
-                        _LOGGER.warning("DEBUG S1000 [%s]: %s", device_id, res)
+                        _LOGGER.warning("REPONSE 2026 [%s]: %s", device_id, res)
 
                         if res.get("code") == 200:
                             data_content = res.get("data")
                             if isinstance(data_content, dict):
-                                # Sur les S1000, les données sont souvent dans 'deviceStatus' ou 'item'
+                                # Extraction du statut (si présent dans deviceStatus)
                                 status = data_content.get("deviceStatus") or data_content
                                 self.data[str(device_id)] = status
                                 
             except Exception as err:
-                _LOGGER.error("Erreur de lecture %s : %s", device_id, err)
+                _LOGGER.debug("Erreur lecture %s : %s", device_id, err)
 
         return self.data
 
     def update_from_mqtt(self, device_id: str, payload: dict[str, Any]) -> None:
-        """Backup MQTT."""
         if device_id not in self.data: self.data[device_id] = {}
         self.data[device_id].update(payload)
         self.async_set_updated_data(self.data)
