@@ -15,10 +15,9 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, CONF_DEVICE_IDS
+from .const import DOMAIN, CONF_DEVICE_ID
 
 _LOGGER = logging.getLogger(__name__)
-
 
 # =========================================================
 # BASE SENSOR
@@ -27,15 +26,12 @@ class StorcubeBaseSensor(CoordinatorEntity, SensorEntity):
     """Base sensor StorCube."""
 
     _attr_has_entity_name = True
-    _attr_native_value = None  # 🔥 important pour éviter unknown au début
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
-
         self._entry = entry
-
-        device_ids = entry.data.get(CONF_DEVICE_IDS, [])
-        self._device_id = str(device_ids[0]) if device_ids else "unknown"
+        # Utilisation de CONF_DEVICE_ID (singulier comme dans ton config_flow probable)
+        self._device_id = entry.data.get(CONF_DEVICE_ID, "unknown")
 
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self._device_id)},
@@ -44,12 +40,25 @@ class StorcubeBaseSensor(CoordinatorEntity, SensorEntity):
             model="S1000",
         )
 
-    def _safe(self, key: str, default: Any = 0.0) -> Any:
-        """Safe access coordinator data."""
-        if not self.coordinator or not self.coordinator.data:
+    def _get_val(self, keys: list[str], default: float = 0.0) -> float:
+        """Cherche une valeur parmi plusieurs clés possibles, y compris dans 'list'."""
+        data = self.coordinator.data
+        if not data:
             return default
-        return self.coordinator.data.get(key, default)
+        
+        # 1. Chercher dans 'list' si présent (format standard Storcube)
+        if "list" in data and isinstance(data["list"], list) and len(data["list"]) > 0:
+            equip = data["list"][0]
+            for key in keys:
+                if key in equip and equip[key] is not None:
+                    return float(equip[key])
 
+        # 2. Chercher à la racine (format simplifié S1000)
+        for key in keys:
+            if key in data and data[key] is not None:
+                return float(data[key])
+        
+        return default
 
 # =========================================================
 # BATTERY LEVEL
@@ -66,15 +75,11 @@ class StorcubeBatteryLevelSensor(StorcubeBaseSensor):
 
     @property
     def native_value(self) -> float:
-        value = self._safe("soc", 0.0)
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return 0.0
-
+        # Cherche 'soc' ou 'battery_level'
+        return self._get_val(["soc", "battery_level"])
 
 # =========================================================
-# OUTPUT POWER
+# OUTPUT POWER (Injection Maison)
 # =========================================================
 class StorcubeBatteryPowerSensor(StorcubeBaseSensor):
     _attr_native_unit_of_measurement = UnitOfPower.WATT
@@ -88,12 +93,8 @@ class StorcubeBatteryPowerSensor(StorcubeBaseSensor):
 
     @property
     def native_value(self) -> float:
-        value = self._safe("power", 0.0)
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return 0.0
-
+        # Cherche 'invPower', 'power' ou 'p_out'
+        return self._get_val(["invPower", "totalInvPower", "power", "pout"])
 
 # =========================================================
 # SOLAR PV
@@ -105,19 +106,16 @@ class StorcubeSolarPowerSensor(StorcubeBaseSensor):
 
     def __init__(self, coordinator, entry, pv_index: int) -> None:
         super().__init__(coordinator, entry)
-
         self._pv_index = pv_index
         self._attr_name = f"Solar PV{pv_index}"
         self._attr_unique_id = f"storcube_{self._device_id}_solar_pv{pv_index}"
 
     @property
     def native_value(self) -> float:
-        value = self._safe(f"pv{self._pv_index}", 0.0)
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return 0.0
-
+        # Cherche 'pv1power' ou 'ppv1' ou 'totalPv1power'
+        idx = self._pv_index
+        keys = [f"pv{idx}power", f"totalPv{idx}power", f"ppv{idx}", f"pv{idx}"]
+        return self._get_val(keys)
 
 # =========================================================
 # TEMPERATURE
@@ -134,12 +132,8 @@ class StorcubeTemperatureSensor(StorcubeBaseSensor):
 
     @property
     def native_value(self) -> float:
-        value = self._safe("temp", 0.0)
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return 0.0
-
+        # Cherche 'temp' ou 'temperature'
+        return self._get_val(["temp", "temperature", "t"])
 
 # =========================================================
 # SETUP ENTRY
@@ -149,17 +143,24 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-
-    coordinator = hass.data[DOMAIN][entry.entry_id].get("coordinator")
+    # On récupère le coordinateur selon la structure définie dans __init__.py
+    data = hass.data[DOMAIN][entry.entry_id]
+    
+    # Si ton __init__ stocke directement le coordinator
+    if isinstance(data, dict):
+        coordinator = data.get("coordinator")
+    else:
+        coordinator = data
 
     if not coordinator:
         _LOGGER.error("StorCube coordinator missing for %s", entry.entry_id)
         return
 
-    entities: list[SensorEntity] = [
+    entities = [
         StorcubeBatteryLevelSensor(coordinator, entry),
         StorcubeBatteryPowerSensor(coordinator, entry),
         StorcubeSolarPowerSensor(coordinator, entry, 1),
+        StorcubeSolarPowerSensor(coordinator, entry, 2), # Ajout du PV2 par défaut
         StorcubeTemperatureSensor(coordinator, entry),
     ]
 
