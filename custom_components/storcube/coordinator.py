@@ -5,11 +5,10 @@ from datetime import timedelta
 from typing import Any
 
 import async_timeout
-import aiohttp
-
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
     DOMAIN,
@@ -61,12 +60,22 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "password": self.entry.data.get(CONF_AUTH_PASSWORD),
                 "appCode": "Storcube"
             }
-            session = self.hass.helpers.aiohttp_client.async_get_clientsession()
+            
+            # Correction : Utilisation directe de la fonction helper de HA
+            session = async_get_clientsession(self.hass)
+            
             async with async_timeout.timeout(10):
                 response = await session.post(TOKEN_URL, json=payload)
                 res_data = await response.json()
-                # Ajuste selon la structure réelle de la réponse Storcube
-                return res_data.get("data", {}).get("token")
+                
+                token = res_data.get("data", {}).get("token")
+                if token:
+                    _LOGGER.debug("Token Storcube récupéré avec succès")
+                    return token
+                
+                _LOGGER.error("Échec récupération Token : %s", res_data.get("msg", "Erreur inconnue"))
+                return None
+                
         except Exception as err:
             _LOGGER.error("Erreur d'authentification Cloud : %s", err)
             return None
@@ -81,54 +90,73 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._token = await self._async_get_token()
 
         url = f"{STATUS_URL}{self._device_id}"
-        headers = {"Authorization": f"Bearer {self._token}"} if self._token else {}
+        
+        # Note : On ajoute le token dans les headers comme souvent requis par les API chinoises
+        headers = {
+            "Authorization": f"Bearer {self._token}" if self._token else "",
+            "token": self._token if self._token else "" # Doublon de sécurité
+        }
         
         try:
             async with async_timeout.timeout(TIMEOUT_SECONDS):
-                session = self.hass.helpers.aiohttp_client.async_get_clientsession()
+                session = async_get_clientsession(self.hass)
                 response = await session.get(url, headers=headers)
                 
-                if response.status == 401: # Token expiré
+                if response.status == 401:
+                    _LOGGER.warning("Session Cloud expirée, tentative de re-connexion au prochain cycle")
                     self._token = None
                     return self.data
 
                 if response.status != 200:
-                    _LOGGER.debug("Serveur injoignable (%s)", response.status)
+                    _LOGGER.debug("Serveur Storcube injoignable (%s)", response.status)
                     return self.data
 
                 payload = await response.json()
-                # On cherche la clé 'data' dans la réponse API
+                
+                # Diagnostic : On logue le payload brut si le debug est actif
+                _LOGGER.debug("Payload reçu du Cloud pour %s : %s", self._device_id, payload)
+
                 data_part = payload.get("data")
                 if isinstance(data_part, dict):
                     self._parse_payload(data_part)
+                elif isinstance(payload, dict):
+                    # Parfois les données sont à la racine
+                    self._parse_payload(payload)
                 
                 return self.data
 
         except Exception as err:
-            _LOGGER.debug("Erreur polling Cloud : %s", err)
+            _LOGGER.debug("Erreur lors du polling Cloud : %s", err)
             return self.data
 
     def update_from_ws(self, payload: dict[str, Any]) -> None:
-        """Callback pour MQTT."""
+        """Callback appelé par le listener MQTT dans __init__.py."""
+        _LOGGER.debug("Mise à jour via MQTT (Push) reçue")
         self._parse_payload(payload)
         self.async_set_updated_data(self.data)
 
     def _parse_payload(self, payload: dict[str, Any]) -> None:
-        """Extraction des données."""
+        """Parse le JSON et met à jour l'état interne."""
         if not isinstance(payload, dict):
             return
 
         self.data[ATTR_EXTRA_STATE] = payload
+        
+        # Mise à jour des valeurs numériques
         self.data["soc"] = self._to_float(payload.get(PAYLOAD_KEY_SOC), self.data["soc"])
         self.data["power"] = self._to_float(payload.get(PAYLOAD_KEY_POWER), self.data["power"])
         self.data["pv"] = self._to_float(payload.get(PAYLOAD_KEY_PV), self.data["pv"])
 
+        # Gestion de l'état en ligne
         online_val = payload.get("online") or payload.get("fgOnline")
         if online_val is not None:
             self.data["online"] = str(online_val).lower() in ("1", "true", "yes", "on", "online")
 
     def _to_float(self, value: Any, default: float = 0.0) -> float:
+        """Conversion sécurisée vers float."""
         try:
-            return float(value) if value not in (None, "") else default
+            if value is None or value == "":
+                return default
+            return float(value)
         except (TypeError, ValueError):
             return default
