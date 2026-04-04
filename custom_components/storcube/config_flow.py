@@ -5,7 +5,7 @@ import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.core import callback
-from homeassistant.data_entry_flow import FlowResult
+from homeassistant.data_entry_flow import FlowResult, AbortFlow
 
 from .const import (
     DOMAIN,
@@ -32,9 +32,9 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 3
 
-    async def async_step_user(self, user_input=None) -> FlowResult:
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Étape initiale de configuration par l'utilisateur."""
-        errors = {}
+        errors: dict[str, str] = {}
 
         if user_input is not None:
             try:
@@ -56,8 +56,8 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     data = {
                         CONF_LOGIN_NAME: login,
                         CONF_AUTH_PASSWORD: user_input[CONF_AUTH_PASSWORD],
-                        CONF_DEVICE_IDS: device_ids,      # Liste complète
-                        CONF_DEVICE_ID: primary_id,      # ID principal (pour compatibilité)
+                        CONF_DEVICE_IDS: device_ids,
+                        CONF_DEVICE_ID: primary_id,
                         CONF_APP_CODE: user_input.get(CONF_APP_CODE, DEFAULT_APP_CODE),
                         CONF_DEBUG: user_input.get(CONF_DEBUG, False),
                     }
@@ -77,6 +77,8 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         data=data,
                     )
 
+            except AbortFlow:
+                raise
             except Exception as err:
                 _LOGGER.exception("Erreur flux de configuration : %s", err)
                 errors["base"] = "unknown"
@@ -87,8 +89,8 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
-    def _schema(self, user_input=None):
-        """Schéma du formulaire."""
+    def _schema(self, user_input: dict[str, Any] | None = None) -> vol.Schema:
+        """Schéma du formulaire dynamique."""
         if user_input is None:
             user_input = {}
 
@@ -111,17 +113,17 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
-    def async_get_options_flow(entry):
+    def async_get_options_flow(entry: config_entries.ConfigEntry) -> StorcubeOptionsFlow:
         return StorcubeOptionsFlow(entry)
 
 
 class StorcubeOptionsFlow(config_entries.OptionsFlow):
-    """Gestion des options."""
+    """Gestion des options modifiables."""
 
-    def __init__(self, entry):
+    def __init__(self, entry: config_entries.ConfigEntry) -> None:
         self.entry = entry
 
-    async def async_step_init(self, user_input=None):
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
