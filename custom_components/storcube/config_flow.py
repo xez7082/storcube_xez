@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import logging
-from typing import Any  # <--- AJOUT INDISPENSABLE
+from typing import Any  # Crucial : manquait à l'appel
 
 import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.core import callback
-from homeassistant.data_entry_flow import FlowResult
+from homeassistant.data_entry_flow import FlowResult, AbortFlow
 
 from .const import (
     DOMAIN,
@@ -79,6 +79,8 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         data=data,
                     )
 
+            except AbortFlow:
+                raise
             except Exception as err:
                 _LOGGER.exception("Erreur flux de configuration : %s", err)
                 errors["base"] = "unknown"
@@ -114,6 +116,7 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(entry: config_entries.ConfigEntry) -> StorcubeOptionsFlow:
+        """Obtenir le flux d'options pour cette entrée."""
         return StorcubeOptionsFlow(entry)
 
 
@@ -121,9 +124,11 @@ class StorcubeOptionsFlow(config_entries.OptionsFlow):
     """Gestion des options modifiables."""
 
     def __init__(self, entry: config_entries.ConfigEntry) -> None:
+        """Initialiser le flux d'options."""
         self.entry = entry
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Gérer les options."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
