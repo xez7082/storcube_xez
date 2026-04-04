@@ -50,8 +50,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         new_global_data = {}
         
         try:
-            # CHANGEMENT MAJEUR : On interroge la LISTE des appareils, pas le détail
-            # C'est souvent là que les S1000 cachent leurs données réelles
+            # On demande la liste globale des équipements
             list_url = "http://baterway.com/api/equip/list"
             
             async with async_timeout.timeout(10):
@@ -59,22 +58,39 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     res = await resp.json()
                     _LOGGER.debug("Réponse Liste Storcube: %s", res)
 
-                    if res.get("code") == 200:
-                        # On parcourt la liste des appareils renvoyés par le serveur
-                        items = res.get("data", {}).get("list", [])
-                        for item in items:
-                            device_sn = str(item.get("deviceSn"))
-                            # On stocke tout l'objet de l'appareil
-                            new_global_data[device_sn] = item
+                    # Analyse de la réponse 'data'
+                    data_payload = res.get("data")
+                    items = []
+
+                    if isinstance(data_payload, list):
+                        # Cas 1: 'data' est directement la liste
+                        items = data_payload
+                    elif isinstance(data_payload, dict):
+                        # Cas 2: 'data' est un dictionnaire contenant 'list'
+                        items = data_payload.get("list", [])
                     
-                    elif res.get("code") == 401:
-                        self._token = None
+                    # On traite les items trouvés
+                    if items:
+                        for item in items:
+                            if isinstance(item, dict):
+                                device_sn = str(item.get("deviceSn") or item.get("deviceId") or "")
+                                if device_sn:
+                                    new_global_data[device_sn] = item
+                    else:
+                        _LOGGER.debug("Aucun équipement trouvé dans 'data' (data=%s)", data_payload)
                         
+                    # Si la liste est vide, on tente quand même le détail en dernier recours
+                    if not new_global_data:
+                        # On récupère les IDs configurés
+                        device_ids = self.entry.data.get(CONF_DEVICE_IDS) or [self.entry.data.get("device_id")]
+                        for d_id in device_ids:
+                            detail_url = f"http://baterway.com/api/equip/detail?device_id={d_id}"
+                            async with session.get(detail_url, headers=headers) as d_resp:
+                                d_res = await d_resp.json()
+                                if d_res.get("code") == 200 and isinstance(d_res.get("data"), dict):
+                                    new_global_data[str(d_id)] = d_res["data"]
+
         except Exception as err:
-            _LOGGER.error("Erreur lors de la récupération de la liste : %s", err)
+            _LOGGER.error("Erreur lors de la récupération : %s", err)
 
-        # Si la liste est vide ou ne contient pas nos IDs, on tente quand même le détail (fallback)
-        if not new_global_data:
-            return self.data
-
-        return new_global_data
+        return new_global_data if new_global_data else self.data
