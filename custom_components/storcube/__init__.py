@@ -21,31 +21,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     _LOGGER.info("Démarrage de l'intégration Storcube : %s", entry.title)
 
-    # Initialisation du stockage des données
-    hass.data.setdefault(DOMAIN, {})
-
+    # 1. Initialisation du coordinateur
     coordinator = StorCubeDataUpdateCoordinator(hass, entry)
 
-    # 1. Premier rafraîchissement (Données Cloud/API)
+    # 2. Premier rafraîchissement (Données Cloud/API)
     try:
         await coordinator.async_config_entry_first_refresh()
     except Exception as err:
         _LOGGER.warning("Le rafraîchissement Cloud a échoué, on continue avec MQTT : %s", err)
 
-    # 2. Préparation du stockage dans hass.data
-    hass.data[DOMAIN][entry.entry_id] = {
-        "coordinator": coordinator,
-        "unsubscribe": None
-    }
+    # 3. STOCKAGE CORRECT (L'objet coordinator doit être la racine)
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][entry.entry_id] = coordinator
 
-    # 3. Récupération du Device ID (Nettoyage pour le topic MQTT)
+    # 4. Préparation MQTT
     raw_id = entry.data.get(CONF_DEVICE_IDS) or entry.data.get(CONF_DEVICE_ID)
     
-    # On s'assure d'avoir un ID propre (string sans espaces)
+    # Extraction propre du premier ID pour l'écoute MQTT
+    device_id = None
     if isinstance(raw_id, list) and len(raw_id) > 0:
         device_id = str(raw_id[0]).strip()
-    else:
-        device_id = str(raw_id).strip() if raw_id else None
+    elif raw_id:
+        device_id = str(raw_id).strip()
 
     if device_id and device_id != "None":
         topic = f"storcube/{device_id}/#"
@@ -54,43 +51,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             """Callback lors de la réception d'un message MQTT."""
             try:
                 payload = json.loads(msg.payload)
-                # _LOGGER.debug("MQTT REÇU (%s): %s", device_id, payload)
-                
-                # On envoie les données au coordinateur pour mettre à jour les sensors
-                if hasattr(coordinator, 'update_from_ws'):
-                    coordinator.update_from_ws(payload)
-                else:
-                    # Si la méthode n'existe pas, on met à jour manuellement les données
-                    coordinator.async_set_updated_data(payload)
-                    
+                # On met à jour le coordinateur (qui lui-même mettra à jour les sensors)
+                coordinator.update_from_ws(payload)
             except Exception as err:
                 _LOGGER.error("Erreur lecture MQTT sur %s: %s", device_id, err)
 
-        # 4. Abonnement MQTT (avec attente si nécessaire)
         async def _subscribe_mqtt():
             try:
-                # On attend que le client MQTT soit connecté
-                connected = await mqtt.async_wait_for_mqtt_client(hass)
-                if connected:
+                # On attend que le client MQTT soit prêt
+                if await mqtt.async_wait_for_mqtt_client(hass):
                     _LOGGER.info("Abonnement au topic temps réel : %s", topic)
-                    unsubscribe = await mqtt.async_subscribe(
+                    # On stocke l'unsubscribe dans l'objet coordinator pour le retrouver au déchargement
+                    coordinator._mqtt_unsubscribe = await mqtt.async_subscribe(
                         hass,
                         topic,
                         _message_received,
                         qos=0,
                     )
-                    hass.data[DOMAIN][entry.entry_id]["unsubscribe"] = unsubscribe
-                else:
-                    _LOGGER.error("Impossible de s'abonner au MQTT : Client non connecté")
             except Exception as err:
                 _LOGGER.error("Erreur lors de l'abonnement MQTT : %s", err)
 
-        # Lancement de l'abonnement en arrière-plan pour ne pas bloquer le démarrage
+        # Lancement en arrière-plan
         entry.async_create_background_task(hass, _subscribe_mqtt(), "storcube_mqtt_sub")
-        
-    else:
-        _LOGGER.error("ERREUR CRITIQUE : Aucun Device ID valide trouvé pour l'abonnement MQTT")
-
+    
     # 5. Lancement des plateformes (sensor.py)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -99,10 +82,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Déchargement propre de l'intégration."""
     
-    # Désabonnement MQTT
-    entry_data = hass.data[DOMAIN].get(entry.entry_id)
-    if entry_data and entry_data.get("unsubscribe"):
-        entry_data["unsubscribe"]()
+    coordinator = hass.data[DOMAIN].get(entry.entry_id)
+    
+    # Désabonnement MQTT si le listener existe
+    if coordinator and hasattr(coordinator, "_mqtt_unsubscribe") and coordinator._mqtt_unsubscribe:
+        coordinator._mqtt_unsubscribe()
         _LOGGER.info("Désabonnement MQTT Storcube effectué.")
 
     # Déchargement des plateformes
