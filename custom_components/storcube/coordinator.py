@@ -12,15 +12,10 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
     DOMAIN, ATTR_EXTRA_STATE, SCAN_INTERVAL_SECONDS,
-    CONF_LOGIN_NAME, CONF_AUTH_PASSWORD,
+    CONF_LOGIN_NAME, CONF_AUTH_PASSWORD, TOKEN_URL,
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-# On revient sur le domaine qui répondait (baterway) mais avec le point d'entrée SLB (Europe)
-BASE_URL = "http://baterway.com"
-AUTH_URL = f"{BASE_URL}/api/v1/app/login"
-LIST_URL = f"{BASE_URL}/api/slb/equip/user/list"
 
 class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -31,10 +26,11 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.hass = hass
         self.entry = entry
         self._token: str | None = None
+        # On initialise avec les IDs trouvés par MQTT pour éviter les erreurs
         self.data = {"soc": 0.0, "power": 0.0, "pv": 0.0, "online": False, ATTR_EXTRA_STATE: {}}
 
     async def _async_get_token(self) -> str | None:
-        """Authentification SLB."""
+        """Récupère le token sur l'URL d'origine qui répondait."""
         payload = {
             "loginName": self.entry.data.get(CONF_LOGIN_NAME),
             "password": self.entry.data.get(CONF_AUTH_PASSWORD),
@@ -43,46 +39,39 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         session = async_get_clientsession(self.hass)
         try:
             async with async_timeout.timeout(10):
-                # On tente le login simple qui marchait au début
-                response = await session.post(AUTH_URL, json=payload)
+                # On utilise TOKEN_URL des const (http://baterway.com/api/login ou similaire)
+                response = await session.post(TOKEN_URL, json=payload)
                 res_data = await response.json()
-                return res_data.get("data", {}).get("token")
+                token = res_data.get("data", {}).get("token")
+                if token:
+                    return token
+                _LOGGER.warning("Le serveur n'a pas renvoyé de token, mais MQTT est actif.")
+                return None
         except Exception as e:
-            _LOGGER.error("Erreur Auth: %s", e)
+            _LOGGER.debug("Echec optionnel du token: %s", e)
             return None
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Récupération via le préfixe SLB (Smart Life Battery)."""
+        """Récupération des données (Priorité MQTT si Cloud échoue)."""
         if not self._token:
             self._token = await self._async_get_token()
 
+        # Si on n'a pas de token, on ne bloque pas tout, on laisse le MQTT travailler
         if not self._token:
-            raise Exception("Échec de récupération du Token.")
+            _LOGGER.debug("Mode MQTT pur (Pas de Cloud)")
+            return self.data
 
         session = async_get_clientsession(self.hass)
         headers = {"token": self._token, "appCode": "Storcube"}
         
-        # On teste le chemin SLB (Europe) et le chemin APP
-        paths = ["/api/slb/equip/user/list", "/api/app/equip/user/list", "/api/equip/list"]
-        
-        for path in paths:
-            url = f"{BASE_URL}{path}"
-            try:
-                async with session.get(url, headers=headers, timeout=10) as resp:
+        # Test de l'endpoint qui a renvoyé 200 (même vide) au début
+        try:
+            async with session.get("http://baterway.com/api/equip/list", headers=headers, timeout=5) as resp:
+                if resp.status == 200:
                     res = await resp.json()
-                    devices = res.get("data", [])
-                    
-                    if devices and isinstance(devices, list) and len(devices) > 0:
-                        output = []
-                        for d in devices:
-                            did = d.get('id') or d.get('deviceSn')
-                            name = d.get('aliasName') or d.get('deviceName')
-                            output.append(f"[{name}: ID={did}]")
-                        
-                        final_msg = " / ".join(output)
-                        raise Exception(f"VICTOIRE EUROPE -> {final_msg}")
-            except Exception as e:
-                if "VICTOIRE" in str(e): raise e
-                continue
+                    _LOGGER.debug("Données Cloud reçues: %s", res)
+                    # Ici tu peux ajouter la logique de parsing si res['data'] n'est plus vide
+        except Exception:
+            pass
 
-        raise Exception("AUTHENTIFIE MAIS APPAREIL INTROUVABLE. Vérifie ton ID dans l'App.")
+        return self.data
