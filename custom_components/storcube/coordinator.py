@@ -11,11 +11,15 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
-    DOMAIN, ATTR_EXTRA_STATE, SCAN_INTERVAL_SECONDS, TIMEOUT_SECONDS,
-    CONF_DEVICE_ID, CONF_LOGIN_NAME, CONF_AUTH_PASSWORD, TOKEN_URL,
+    DOMAIN, ATTR_EXTRA_STATE, SCAN_INTERVAL_SECONDS,
+    CONF_LOGIN_NAME, CONF_AUTH_PASSWORD,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Mise à jour des URLs vers le Cloud Global sécurisé
+CLOUD_BASE = "https://api.storcube.com"
+LOGIN_URL = f"{CLOUD_BASE}/api/v1/app/login" # Nouvelle URL de Login
 
 class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -29,7 +33,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.data = {"soc": 0.0, "power": 0.0, "pv": 0.0, "online": False, ATTR_EXTRA_STATE: {}}
 
     async def _async_get_token(self) -> str | None:
-        """Récupère le token via l'API."""
+        """Authentification sur le Cloud Global."""
         payload = {
             "loginName": self.entry.data.get(CONF_LOGIN_NAME),
             "password": self.entry.data.get(CONF_AUTH_PASSWORD),
@@ -38,47 +42,48 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         session = async_get_clientsession(self.hass)
         try:
             async with async_timeout.timeout(10):
-                # On essaie de récupérer le token en HTTPS
-                response = await session.post(TOKEN_URL.replace("http://", "https://"), json=payload)
+                # On force le Login sur le nouveau serveur
+                response = await session.post(LOGIN_URL, json=payload)
                 res_data = await response.json()
-                return res_data.get("data", {}).get("token")
+                token = res_data.get("data", {}).get("token")
+                if token:
+                    _LOGGER.debug("Nouveau Token Cloud récupéré")
+                    return token
+                _LOGGER.error("Réponse Login sans Token: %s", res_data)
+                return None
         except Exception as e:
-            _LOGGER.error("Erreur de token : %s", e)
+            _LOGGER.error("Erreur critique lors de l'auth: %s", e)
             return None
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Scan final avec protocoles sécurisés et chemins v1/app."""
+        """Récupération des données avec le nouveau Token."""
         if not self._token:
             self._token = await self._async_get_token()
 
         if not self._token:
-            raise Exception("Échec d'authentification.")
+            raise Exception("AUTHENTIFICATION ECHOUEE : Vérifiez Email/Mot de passe sur api.storcube.com")
 
-        # Liste des endpoints les plus probables en HTTPS
-        scanners = [
-            "https://api.storcube.com/api/v1/app/equip/list",
-            "https://api.storcube.com/api/v1/device/list",
-            "https://api.storcube.com/api/equip/list",
-            "https://baterway.com/api/v1/app/equip/list",
-            "https://baterway.com/api/equip/list"
+        # Liste des endpoints Cloud 2.0
+        endpoints = [
+            f"{CLOUD_BASE}/api/v1/app/equip/list",
+            f"{CLOUD_BASE}/api/v1/device/list",
+            f"{CLOUD_BASE}/api/equip/list"
         ]
         
         session = async_get_clientsession(self.hass)
-        scan_results = []
-
-        for url in scanners:
+        
+        for url in endpoints:
             try:
                 headers = {
                     "token": self._token,
                     "appCode": "Storcube",
-                    "User-Agent": "Dart/3.0 (dart:io)", # Simule l'app Flutter/Dart
-                    "Content-Type": "application/json"
+                    "User-Agent": "Dart/3.0 (dart:io)"
                 }
                 async with session.get(url, headers=headers, timeout=10) as resp:
                     res = await resp.json()
                     data_raw = res.get("data", [])
                     
-                    # On cherche la liste d'appareils (gestion des formats objet ou liste)
+                    # On extrait la liste
                     items = data_raw if isinstance(data_raw, list) else data_raw.get("list", []) if isinstance(data_raw, dict) else []
                     
                     if items and len(items) > 0:
@@ -89,12 +94,10 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             output.append(f"[{name}: ID={oid}]")
                         
                         final_msg = " / ".join(output)
-                        _LOGGER.error("!!! VICTOIRE !!! Endpoint: %s", url)
-                        raise Exception(f"TES IDENTIFIANTS REELS SONT ICI -> {final_msg}")
-                    
-                    scan_results.append(f"{url.split('/')[-2]}: {resp.status}")
+                        _LOGGER.error("!!! SUCCÈS CLOUD !!!")
+                        raise Exception(f"TES IDENTIFIANTS SONT ENFIN ICI -> {final_msg}")
             except Exception as e:
-                if "TES IDENTIFIANTS" in str(e): raise e
-                scan_results.append(f"{url.split('/')[-1]}: {type(e).__name__}")
+                if "IDENTIFIANTS" in str(e): raise e
+                continue
 
-        raise Exception(f"SCAN HTTPS TERMINE. Résultats : {', '.join(scan_results[:4])}")
+        raise Exception("COMPTE RECONNU MAIS LISTE VIDE. Est-ce que la batterie est bien visible dans l'App mobile ?")
