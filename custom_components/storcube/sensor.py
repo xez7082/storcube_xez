@@ -22,7 +22,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Configuration des capteurs Storcube à partir de l'entrée de config."""
-    # On récupère l'objet coordinateur directement
+    # On récupère l'objet coordinateur directement (doit être l'objet, pas un dict)
     coordinator = hass.data[DOMAIN][entry.entry_id]
     
     # Récupération des IDs (liste ou ID unique)
@@ -60,12 +60,9 @@ class StorCubeSensor(CoordinatorEntity, SensorEntity):
         
         # Formatage du nom pour l'interface
         self._attr_name = f"{name} {suffix}"
-        
-        # ID unique pour la base de données interne de Home Assistant
         self._attr_unique_id = f"{DOMAIN}_{device_id}_{key}"
         
-        # ID de l'entité (utilisé par tes automatisations et alertes batterie)
-        # On recrée exactement sensor.capacite_batterie_9105..._maitre
+        # ID de l'entité pour tes automatisations
         slug_name = name.lower().replace(" ", "_").replace("é", "e")
         self.entity_id = f"sensor.{slug_name}_{device_id}_{suffix}"
         
@@ -73,7 +70,6 @@ class StorCubeSensor(CoordinatorEntity, SensorEntity):
         self._attr_device_class = device_class
         self._attr_state_class = SensorStateClass.MEASUREMENT
 
-        # Regroupement par appareil dans l'onglet "Appareils"
         self._attr_device_info = {
             "identifiers": {(DOMAIN, self._device_id)},
             "name": f"StorCube S1000 ({suffix})",
@@ -83,11 +79,22 @@ class StorCubeSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        """Récupère la valeur en temps réel depuis le coordinateur."""
-        # On accède aux données spécifiques de CETTE batterie
-        device_data = self.coordinator.data.get(self._device_id, {})
+        """Récupère la valeur en temps réel avec protection contre les types invalides."""
+        # Vérification que coordinator.data est bien un dictionnaire
+        if not isinstance(self.coordinator.data, dict):
+            return 0
+
+        # Récupération des données de CETTE batterie spécifique
+        device_data = self.coordinator.data.get(self._device_id)
         
-        # Mapping de sécurité pour gérer les variations de clés de l'API Cloud
+        # SÉCURITÉ : Si device_data est un entier (ex: 50) ou n'existe pas, on gère proprement
+        if not isinstance(device_data, dict):
+            # Si l'API renvoie directement une valeur numérique pour cet ID
+            if isinstance(device_data, (int, float)):
+                return device_data
+            return 0
+        
+        # Mapping de sécurité pour les clés de l'API Cloud/MQTT
         mapping = {
             "invPower": ["invPower", "p_out", "outputPower", "out_p"],
             "pv1power": ["pv1power", "p_pv1", "pv1_p"],
@@ -96,9 +103,11 @@ class StorCubeSensor(CoordinatorEntity, SensorEntity):
             "temp": ["temp", "temperature", "temp_c"]
         }
 
+        # On teste les clés du mapping
         if self._key in mapping:
             for potential_key in mapping[self._key]:
                 if potential_key in device_data:
                     return device_data[potential_key]
 
+        # Fallback sur la clé directe
         return device_data.get(self._key, 0)
