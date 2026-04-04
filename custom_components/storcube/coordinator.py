@@ -28,7 +28,7 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Coordinateur optimisé pour l'extraction des IDs réels."""
+    """Coordinateur avec injection de diagnostic dans les attributs d'entité."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         super().__init__(
@@ -41,6 +41,8 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.entry = entry
         self._device_id = entry.data.get(CONF_DEVICE_ID)
         self._token: str | None = None
+        self._diagnostic_info: str = "Aucune donnée de découverte"
+        
         self.data = {
             "soc": 0.0,
             "power": 0.0,
@@ -64,35 +66,29 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 token = res_data.get("data", {}).get("token")
                 return str(token) if token else None
         except Exception:
-            _LOGGER.exception("Erreur Token")
             return None
 
     async def _async_discover_devices(self):
-        """Sonde les endpoints pour trouver les IDs valides."""
-        # On essaie les deux endpoints de liste connus
-        for path in ["/api/equip/user/list", "/api/equip/list"]:
-            url = f"http://baterway.com{path}"
-            headers = {"token": self._token}
-            try:
-                session = async_get_clientsession(self.hass)
-                async with session.get(url, headers=headers, timeout=10) as resp:
-                    res = await resp.json()
-                    devices = res.get("data", [])
-                    if isinstance(devices, list) and len(devices) > 0:
-                        _LOGGER.error(f"--- DÉCOUVERTE VIA {path} ---")
-                        for d in devices:
-                            # On logge uniquement le strict nécessaire pour éviter les coupures
-                            d_id = d.get('id')
-                            d_sn = d.get('deviceSn')
-                            d_name = d.get('aliasName') or d.get('deviceName')
-                            _LOGGER.error(f"TROUVÉ: [{d_name}] ID: {d_id} | SN: {d_sn}")
-                        _LOGGER.error("----------------------------------")
-                        return # On s'arrête si on a trouvé
-            except Exception:
-                continue
+        """Tente de trouver les IDs réels et les stocke pour l'utilisateur."""
+        url = "http://baterway.com/api/equip/user/list"
+        headers = {"token": self._token}
+        try:
+            session = async_get_clientsession(self.hass)
+            async with session.get(url, headers=headers, timeout=10) as resp:
+                res = await resp.json()
+                devices = res.get("data", [])
+                if isinstance(devices, list) and len(devices) > 0:
+                    results = []
+                    for d in devices:
+                        info = f"Nom: {d.get('aliasName')} | ID: {d.get('id')} | SN: {d.get('deviceSn')}"
+                        results.append(info)
+                    self._diagnostic_info = " / ".join(results)
+                    _LOGGER.error(f"DIAGNOSTIC STORCUBE: {self._diagnostic_info}")
+        except Exception as err:
+            self._diagnostic_info = f"Erreur découverte: {err}"
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Polling des données."""
+        """Polling des données avec fallback diagnostic."""
         if not self._token:
             self._token = await self._async_get_token()
             if self._token:
@@ -113,7 +109,11 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if isinstance(data_part, dict):
                     self._parse_payload(data_part)
                 else:
-                    _LOGGER.debug(f"ID {self._device_id} incorrect (data: 0). Utilise l'ID ou SN trouvé dans les logs ERROR.")
+                    # On injecte le résultat de la découverte dans les attributs pour que tu puisses le voir
+                    self.data[ATTR_EXTRA_STATE] = {
+                        "statut_erreur": "ID configuré incorrect",
+                        "ids_trouves_sur_compte": self._diagnostic_info
+                    }
                 
                 return self.data
         except Exception as err:
@@ -129,6 +129,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.data["soc"] = self._to_float(payload.get(PAYLOAD_KEY_SOC), self.data["soc"])
         self.data["power"] = self._to_float(payload.get(PAYLOAD_KEY_POWER), self.data["power"])
         self.data["pv"] = self._to_float(payload.get(PAYLOAD_KEY_PV), self.data["pv"])
+        
         online_val = payload.get("online") or payload.get("fgOnline")
         if online_val is not None:
             self.data["online"] = str(online_val).lower() in ("1", "true", "yes", "on", "online")
