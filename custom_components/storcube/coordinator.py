@@ -64,19 +64,18 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 response = await session.post(TOKEN_URL, json=payload)
                 res_data = await response.json()
                 
-                # Vérification du code de retour API (200 = Succès)
                 if res_data.get("code") != 200:
                     _LOGGER.error("Erreur login API : %s", res_data.get("msg", "Inconnu"))
                     return None
 
                 token = res_data.get("data", {}).get("token")
                 if token:
-                    _LOGGER.info("Nouveau token Storcube récupéré avec succès")
+                    _LOGGER.info("Authentification réussie, token récupéré")
                     return str(token)
                 
                 return None
         except Exception:
-            _LOGGER.exception("Erreur critique lors de l'authentification :")
+            _LOGGER.exception("Erreur lors de la récupération du token :")
             return None
 
     async def _async_update_data(self) -> dict[str, Any]:
@@ -84,18 +83,17 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not self._device_id:
             return self.data
 
-        # 1. Gestion du Token
         if not self._token:
             self._token = await self._async_get_token()
             if not self._token:
                 return self.data
 
-        # 2. Appel à l'URL DETAIL
         url = f"{DETAIL_URL}{self._device_id}"
         
+        # Headers simplifiés pour le mode HTTP (port 80)
         headers = {
-            "Authorization": f"Bearer {self._token}",
-            "token": self._token
+            "token": self._token,
+            "Content-Type": "application/json"
         }
         
         try:
@@ -104,42 +102,41 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 response = await session.get(url, headers=headers)
                 
                 if response.status == 401:
-                    _LOGGER.warning("Token expiré, sera renouvelé au prochain cycle")
+                    _LOGGER.warning("Session expirée, renouvellement au prochain cycle")
                     self._token = None
                     return self.data
 
                 if response.status != 200:
-                    _LOGGER.debug("Serveur injoignable (Status: %s)", response.status)
+                    _LOGGER.debug("Serveur injoignable (HTTP %s)", response.status)
                     return self.data
 
                 payload = await response.json()
-                
-                # Log de débogage pour voir la structure reçue
-                _LOGGER.debug("Données reçues pour %s: %s", self._device_id, payload)
+                _LOGGER.debug("Réponse reçue pour %s: %s", self._device_id, payload)
 
                 data_part = payload.get("data")
                 
-                # Validation : on ne parse que si 'data' est un dictionnaire
+                # Traitement de la réponse
                 if isinstance(data_part, dict):
                     self._parse_payload(data_part)
                 elif isinstance(payload, dict) and PAYLOAD_KEY_SOC in payload:
                     self._parse_payload(payload)
                 else:
-                    _LOGGER.debug("Réponse vide ou incorrecte (data: %s)", data_part)
+                    # Ici on gère le cas 'data': 0
+                    _LOGGER.debug("Pas de données valides pour l'ID %s (data: %s)", self._device_id, data_part)
                 
                 return self.data
 
         except Exception as err:
-            _LOGGER.debug("Erreur lors de la récupération des données : %s", err)
+            _LOGGER.debug("Erreur de connexion API : %s", err)
             return self.data
 
     def update_from_ws(self, payload: dict[str, Any]) -> None:
-        """Mise à jour poussée par MQTT."""
+        """Mise à jour via MQTT."""
         self._parse_payload(payload)
         self.async_set_updated_data(self.data)
 
     def _parse_payload(self, payload: dict[str, Any]) -> None:
-        """Extraction et conversion des valeurs."""
+        """Conversion et mise à jour de l'état interne."""
         if not payload or not isinstance(payload, dict):
             return
 
@@ -148,13 +145,11 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.data["power"] = self._to_float(payload.get(PAYLOAD_KEY_POWER), self.data["power"])
         self.data["pv"] = self._to_float(payload.get(PAYLOAD_KEY_PV), self.data["pv"])
 
-        # Gestion de l'état en ligne (plusieurs variantes de clés possibles)
         online_val = payload.get("online") or payload.get("fgOnline")
         if online_val is not None:
             self.data["online"] = str(online_val).lower() in ("1", "true", "yes", "on", "online")
 
     def _to_float(self, value: Any, default: float = 0.0) -> float:
-        """Conversion sécurisée en nombre flottant."""
         try:
             if value in (None, ""): 
                 return default
