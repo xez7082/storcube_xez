@@ -29,7 +29,6 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.data = {"soc": 0.0, "power": 0.0, "pv": 0.0, "online": False, ATTR_EXTRA_STATE: {}}
 
     async def _async_get_token(self) -> str | None:
-        """Récupère le token d'authentification."""
         payload = {
             "loginName": self.entry.data.get(CONF_LOGIN_NAME),
             "password": self.entry.data.get(CONF_AUTH_PASSWORD),
@@ -41,24 +40,24 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 response = await session.post(TOKEN_URL, json=payload)
                 res_data = await response.json()
                 return res_data.get("data", {}).get("token")
-        except Exception as e:
-            _LOGGER.error("Erreur de token : %s", e)
+        except Exception:
             return None
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Scan des endpoints 'Station' pour trouver tes batteries."""
+        """Scan des structures Home/Family/Device pour trouver l'ID."""
         if not self._token:
             self._token = await self._async_get_token()
 
         if not self._token:
             raise Exception("Échec d'authentification.")
 
-        # On teste les nouveaux endpoints utilisés par l'App récente
+        # On teste les structures résidentielles (Family / Home / Device)
         paths_to_test = [
-            "/api/station/list",
-            "/api/station/user/list",
-            "/api/slb/station/list",
-            "/api/app/station/list"
+            "/api/family/list",
+            "/api/home/list",
+            "/api/device/list",
+            "/api/slb/family/list",
+            "/api/app/home/list"
         ]
         
         session = async_get_clientsession(self.hass)
@@ -71,16 +70,16 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     res = await resp.json()
                     data_raw = res.get("data", [])
                     
-                    # Support des deux formats : [item1, item2] OU {"list": [item1, item2]}
-                    devices = data_raw if isinstance(data_raw, list) else data_raw.get("list", [])
+                    # On fouille partout : data directe ou data.list
+                    items = data_raw if isinstance(data_raw, list) else data_raw.get("list", []) if isinstance(data_raw, dict) else []
                     
-                    if devices and len(devices) > 0:
+                    if items and len(items) > 0:
                         output = []
-                        for d in devices:
-                            # On récupère l'ID le plus probable
-                            did = d.get('id') or d.get('stationId') or d.get('deviceSn')
-                            name = d.get('aliasName') or d.get('stationName') or d.get('deviceName')
-                            output.append(f"[{name}: ID={did}]")
+                        for i in items:
+                            # On tente de trouver n'importe quel ID d'objet
+                            oid = i.get('id') or i.get('homeId') or i.get('familyId') or i.get('deviceSn')
+                            name = i.get('name') or i.get('homeName') or i.get('aliasName') or "Appareil"
+                            output.append(f"[{name}: ID={oid}]")
                         
                         final_msg = " / ".join(output)
                         _LOGGER.error("!!! SCAN REUSSI SUR %s !!!", path)
@@ -91,4 +90,4 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if "TES IDENTIFIANTS" in str(e): raise e
                 scan_results.append(f"{path}: Erreur {type(e).__name__}")
 
-        raise Exception(f"ECHEC FINAL. Résultats : {', '.join(scan_results)}")
+        raise Exception(f"ECHEC SCAN RESIDENTIEL. Résultats : {', '.join(scan_results)}")
