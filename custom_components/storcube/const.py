@@ -14,7 +14,6 @@ DEVELOPER: Final = "xez7082"
 # =========================================================
 # CONFIG KEYS
 # =========================================================
-# Double gestion pour assurer la transition sans erreur
 CONF_DEVICE_ID: Final = "device_id"
 CONF_DEVICE_IDS: Final = "device_ids" 
 
@@ -40,14 +39,17 @@ DEFAULT_MQTT_PORT: Final = 1883
 DEFAULT_MQTT_TOPIC: Final = "storcube/{device_id}/#"
 
 # =========================================================
-# API ENDPOINTS
+# API ENDPOINTS (Passage en HTTPS + Correction des URLs)
 # =========================================================
-BASE_URL: Final = "http://baterway.com"
+# L'API de Baterway préfère souvent le HTTPS pour l'envoi de tokens
+BASE_URL: Final = "https://baterway.com"
 
 TOKEN_URL: Final = f"{BASE_URL}/api/user/app/login"
-# URLs formatées pour recevoir directement l'ID à la suite
+
+# Utilise DETAIL_URL si STATUS_URL continue de renvoyer 'data: 0'
 DETAIL_URL: Final = f"{BASE_URL}/api/equip/detail?equipId="
 STATUS_URL: Final = f"{BASE_URL}/api/equip/status?equipId="
+
 SCENE_URL: Final = f"{BASE_URL}/api/scene/user/list/V2?equipId="
 FIRMWARE_URL: Final = f"{BASE_URL}/api/equip/version/need/upgrade?equipId="
 
@@ -57,12 +59,13 @@ SET_THRESHOLD_URL: Final = f"{BASE_URL}/api/scene/threshold/set"
 # =========================================================
 # PAYLOAD MAPPING (Clés JSON Batterie)
 # =========================================================
+# Ces clés correspondent à ce que renvoie l'endpoint /detail
 PAYLOAD_KEY_SOC: Final = "soc"
 PAYLOAD_KEY_POWER: Final = "outputPower"
 PAYLOAD_KEY_PV: Final = "pvPower"
 PAYLOAD_KEY_ONLINE: Final = "online"
 
-# Clé pour les attributs étendus
+# Clé pour les attributs étendus dans Home Assistant
 ATTR_EXTRA_STATE: Final = "extra"
 
 # =========================================================
