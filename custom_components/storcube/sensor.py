@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, UnitOfPower, UnitOfTemperature
+from homeassistant.const import (
+    PERCENTAGE, 
+    UnitOfPower, 
+    UnitOfTemperature, 
+    UnitOfEnergy
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -21,54 +27,66 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Configuration des capteurs Storcube à partir de l'entrée de config."""
-    # On récupère l'objet coordinateur directement (doit être l'objet, pas un dict)
+    """Configuration de TOUS les capteurs Storcube."""
     coordinator = hass.data[DOMAIN][entry.entry_id]
     
-    # Récupération des IDs (liste ou ID unique)
     device_ids = entry.data.get("device_ids")
     if not device_ids:
         device_ids = [entry.data.get("device_id")]
 
     entities = []
     for index, device_id in enumerate(device_ids):
-        # Identification Maître / Esclave
         suffix = "maitre" if index == 0 else "esclave"
         dev_id_str = str(device_id).strip()
         
-        _LOGGER.debug("Création des capteurs pour l'appareil %s (%s)", dev_id_str, suffix)
-        
-        entities.extend([
-            StorCubeSensor(coordinator, dev_id_str, "soc", "Capacité Batterie", PERCENTAGE, SensorDeviceClass.BATTERY, suffix),
-            StorCubeSensor(coordinator, dev_id_str, "invPower", "Puissance de Sortie", UnitOfPower.WATT, SensorDeviceClass.POWER, suffix),
-            StorCubeSensor(coordinator, dev_id_str, "pv1power", "Solaire PV1", UnitOfPower.WATT, SensorDeviceClass.POWER, suffix),
-            StorCubeSensor(coordinator, dev_id_str, "pv2power", "Solaire PV2", UnitOfPower.WATT, SensorDeviceClass.POWER, suffix),
-            StorCubeSensor(coordinator, dev_id_str, "temp", "Température", UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE, suffix),
-        ])
+        # Liste exhaustive des capteurs à créer pour chaque batterie
+        sensor_definitions = [
+            # --- BATTERIE ---
+            ("soc", "Capacité Batterie", PERCENTAGE, SensorDeviceClass.BATTERY, SensorStateClass.MEASUREMENT),
+            ("temp", "Température Batterie", UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE, SensorStateClass.MEASUREMENT),
+            ("capacity", "Capacité Wh", UnitOfEnergy.WATT_HOUR, SensorDeviceClass.ENERGY_STORAGE, SensorStateClass.MEASUREMENT),
+            ("reserved", "Seuil Batterie", PERCENTAGE, None, SensorStateClass.MEASUREMENT),
+            
+            # --- PUISSANCE (Watts) ---
+            ("invPower", "Puissance Sortie", UnitOfPower.WATT, SensorDeviceClass.POWER, SensorStateClass.MEASUREMENT),
+            ("pv1power", "Solaire PV1", UnitOfPower.WATT, SensorDeviceClass.POWER, SensorStateClass.MEASUREMENT),
+            ("pv2power", "Solaire PV2", UnitOfPower.WATT, SensorDeviceClass.POWER, SensorStateClass.MEASUREMENT),
+            
+            # --- ÉTAT SYSTÈME ---
+            ("workStatus", "Statut Travail", None, None, None),
+            ("outputType", "Type Sortie", None, None, None),
+            ("isWork", "État En Ligne", None, None, None),
+            ("errorCode", "Code Erreur", None, None, None),
+            ("version", "Version Firmware", None, None, None),
+        ]
+
+        for key, name, unit, dev_class, state_class in sensor_definitions:
+            entities.append(
+                StorCubeSensor(coordinator, dev_id_str, key, name, unit, dev_class, state_class, suffix)
+            )
 
     async_add_entities(entities)
 
 class StorCubeSensor(CoordinatorEntity, SensorEntity):
-    """Représentation d'un capteur StorCube."""
+    """Représentation universelle d'un capteur StorCube."""
 
-    def __init__(self, coordinator, device_id, key, name, unit, device_class, suffix):
-        """Initialisation du capteur."""
+    def __init__(self, coordinator, device_id, key, name, unit, device_class, state_class, suffix):
         super().__init__(coordinator)
         self._device_id = device_id
         self._key = key
-        self._suffix = suffix
         
-        # Formatage du nom pour l'interface
+        # Identification
         self._attr_name = f"{name} {suffix}"
         self._attr_unique_id = f"{DOMAIN}_{device_id}_{key}"
         
-        # ID de l'entité pour tes automatisations
+        # Génération de l'entity_id propre
         slug_name = name.lower().replace(" ", "_").replace("é", "e")
         self.entity_id = f"sensor.{slug_name}_{device_id}_{suffix}"
         
+        # Propriétés HA
         self._attr_native_unit_of_measurement = unit
         self._attr_device_class = device_class
-        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_state_class = state_class
 
         self._attr_device_info = {
             "identifiers": {(DOMAIN, self._device_id)},
@@ -79,35 +97,38 @@ class StorCubeSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        """Récupère la valeur en temps réel avec protection contre les types invalides."""
-        # Vérification que coordinator.data est bien un dictionnaire
+        """Récupération de la valeur avec gestion des erreurs de type."""
         if not isinstance(self.coordinator.data, dict):
-            return 0
+            return None
 
-        # Récupération des données de CETTE batterie spécifique
         device_data = self.coordinator.data.get(self._device_id)
-        
-        # SÉCURITÉ : Si device_data est un entier (ex: 50) ou n'existe pas, on gère proprement
         if not isinstance(device_data, dict):
-            # Si l'API renvoie directement une valeur numérique pour cet ID
-            if isinstance(device_data, (int, float)):
-                return device_data
-            return 0
-        
-        # Mapping de sécurité pour les clés de l'API Cloud/MQTT
+            return None
+
+        # Mapping pour trouver la bonne clé selon ce que renvoie l'API
         mapping = {
-            "invPower": ["invPower", "p_out", "outputPower", "out_p"],
-            "pv1power": ["pv1power", "p_pv1", "pv1_p"],
-            "pv2power": ["pv2power", "p_pv2", "pv2_p"],
-            "soc": ["soc", "battery_soc", "bat_soc"],
-            "temp": ["temp", "temperature", "temp_c"]
+            "invPower": ["invPower", "p_out", "outputPower"],
+            "pv1power": ["pv1power", "p_pv1", "totalPv1power"],
+            "pv2power": ["pv2power", "p_pv2", "totalPv2power"],
+            "soc": ["soc", "battery_soc"],
+            "temp": ["temp", "temperature"],
+            "workStatus": ["workStatus", "status"],
+            "isWork": ["isWork", "rgOnline", "mainEquipOnline"]
         }
 
-        # On teste les clés du mapping
+        # On cherche la valeur
+        val = None
         if self._key in mapping:
             for potential_key in mapping[self._key]:
                 if potential_key in device_data:
-                    return device_data[potential_key]
+                    val = device_data[potential_key]
+                    break
+        
+        if val is None:
+            val = device_data.get(self._key)
 
-        # Fallback sur la clé directe
-        return device_data.get(self._key, 0)
+        # Petit traitement spécial pour l'état de travail (isWork)
+        if self._key == "isWork" and val is not None:
+            return "Online" if val == 1 else "Offline"
+
+        return val
