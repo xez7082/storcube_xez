@@ -29,12 +29,12 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.data: dict[str, Any] = {}
 
     async def _async_get_token(self) -> str | None:
-        """Auth sur le serveur global (plus fiable au niveau DNS)."""
+        """Auth sur le domaine racine (souvent mieux résolu par les DNS)."""
         login = self.entry.data.get(CONF_LOGIN_NAME)
         password = self.entry.data.get(CONF_AUTH_PASSWORD)
         
-        # URL globale (Net est souvent plus stable que EU)
-        url = "https://api.baterway.net/api/login/login"
+        # On utilise baterway.com direct (plus robuste que api.baterway.net)
+        url = "http://baterway.com/api/login/login"
         payload = {
             "loginName": login,
             "password": password,
@@ -48,13 +48,15 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 response = await session.post(url, json=payload)
                 res_data = await response.json()
                 token = res_data.get("data", {}).get("token")
+                if token:
+                    _LOGGER.debug("Authentification réussie sur baterway.com")
                 return token
         except Exception as e:
-            _LOGGER.error("Erreur Auth (DNS/Net) : %s", e)
+            _LOGGER.error("Blocage DNS persistant sur baterway.com : %s", e)
         return None
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Récupération via Endpoint 2026 sur serveur Global."""
+        """Récupération des données via le domaine racine."""
         if not self._token:
             self._token = await self._async_get_token()
 
@@ -73,24 +75,24 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for device_id in device_ids:
             if not device_id: continue
 
-            # On tente l'endpoint qui a remplacé celui de Jon7119 en février
-            url = f"https://api.baterway.net/api/device/getDeviceDetail?deviceSn={device_id}"
+            # Utilisation de deviceSn comme demandé par la mise à jour de février
+            url = f"http://baterway.com/api/device/getDeviceDetail?deviceSn={device_id}"
             
             try:
                 async with async_timeout.timeout(10):
                     async with session.get(url, headers=headers) as resp:
                         res = await resp.json()
-                        _LOGGER.warning("REPONSE 2026 [%s]: %s", device_id, res)
+                        _LOGGER.warning("RETOUR CLOUD [%s]: %s", device_id, res)
 
                         if res.get("code") == 200:
                             data_content = res.get("data")
                             if isinstance(data_content, dict):
-                                # Extraction du statut (si présent dans deviceStatus)
+                                # On prend deviceStatus ou la racine du data
                                 status = data_content.get("deviceStatus") or data_content
                                 self.data[str(device_id)] = status
                                 
             except Exception as err:
-                _LOGGER.debug("Erreur lecture %s : %s", device_id, err)
+                _LOGGER.debug("Erreur lecture Cloud %s : %s", device_id, err)
 
         return self.data
 
