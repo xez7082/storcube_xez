@@ -46,19 +46,19 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return None
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Scan multi-endpoints pour trouver le chemin valide de ton compte."""
+        """Scan des endpoints 'Station' pour trouver tes batteries."""
         if not self._token:
             self._token = await self._async_get_token()
 
         if not self._token:
-            raise Exception("Échec d'authentification : vérifie tes identifiants.")
+            raise Exception("Échec d'authentification.")
 
-        # Liste des URLs à tester (certaines versions d'API utilisent /slb ou /app)
+        # On teste les nouveaux endpoints utilisés par l'App récente
         paths_to_test = [
-            "/api/slb/equip/user/list",
-            "/api/app/equip/user/list",
-            "/api/equip/list",
-            "/api/equip/user/list" # Ton ancien qui faisait 404
+            "/api/station/list",
+            "/api/station/user/list",
+            "/api/slb/station/list",
+            "/api/app/station/list"
         ]
         
         session = async_get_clientsession(self.hass)
@@ -69,13 +69,18 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             try:
                 async with session.get(url, headers={"token": self._token}, timeout=5) as resp:
                     res = await resp.json()
-                    devices = res.get("data", [])
+                    data_raw = res.get("data", [])
                     
-                    if devices and isinstance(devices, list):
-                        # VICTOIRE : On a trouvé des données !
+                    # Support des deux formats : [item1, item2] OU {"list": [item1, item2]}
+                    devices = data_raw if isinstance(data_raw, list) else data_raw.get("list", [])
+                    
+                    if devices and len(devices) > 0:
                         output = []
                         for d in devices:
-                            output.append(f"[Nom: {d.get('aliasName')} | ID: {d.get('id')} | SN: {d.get('deviceSn')}]")
+                            # On récupère l'ID le plus probable
+                            did = d.get('id') or d.get('stationId') or d.get('deviceSn')
+                            name = d.get('aliasName') or d.get('stationName') or d.get('deviceName')
+                            output.append(f"[{name}: ID={did}]")
                         
                         final_msg = " / ".join(output)
                         _LOGGER.error("!!! SCAN REUSSI SUR %s !!!", path)
@@ -86,5 +91,4 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if "TES IDENTIFIANTS" in str(e): raise e
                 scan_results.append(f"{path}: Erreur {type(e).__name__}")
 
-        # Si on arrive ici, c'est que rien n'a fonctionné
-        raise Exception(f"ECHEC DU SCAN. Résultats : {', '.join(scan_results)}")
+        raise Exception(f"ECHEC FINAL. Résultats : {', '.join(scan_results)}")
