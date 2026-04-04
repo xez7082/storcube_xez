@@ -6,10 +6,10 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
-from homeassistant.exceptions import HomeAssistantError
 
 from .const import (
     DOMAIN,
+    CONF_DEVICE_ID,
     CONF_DEVICE_IDS,
     CONF_LOGIN_NAME,
     CONF_AUTH_PASSWORD,
@@ -38,30 +38,31 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             try:
-                # 1. Nettoyage et validation des Device IDs
+                # 1. Nettoyage des IDs
                 raw_ids = user_input.get(CONF_DEVICE_IDS, "")
                 device_ids = [d.strip() for d in raw_ids.split(",") if d.strip()]
 
                 if not device_ids:
                     errors["base"] = "no_device"
                 else:
-                    # 2. Création de l'ID unique (basé sur le premier device pour éviter les doublons)
+                    # 2. Création de l'ID unique
                     login = user_input[CONF_LOGIN_NAME]
-                    unique_id = f"{login}_{device_ids[0]}"
-                    await self.async_set_unique_id(unique_id)
+                    primary_id = device_ids[0]
+                    
+                    await self.async_set_unique_id(f"{login}_{primary_id}")
                     self._abort_if_unique_id_configured()
 
-                    # 3. Préparation des données pour l'entrée
-                    # On s'assure que CONF_DEVICE_IDS reste une liste dans 'data'
+                    # 3. Construction du dictionnaire de données
                     data = {
                         CONF_LOGIN_NAME: login,
                         CONF_AUTH_PASSWORD: user_input[CONF_AUTH_PASSWORD],
-                        CONF_DEVICE_IDS: device_ids,
+                        CONF_DEVICE_IDS: device_ids,      # Liste complète
+                        CONF_DEVICE_ID: primary_id,      # ID principal (pour compatibilité)
                         CONF_APP_CODE: user_input.get(CONF_APP_CODE, DEFAULT_APP_CODE),
                         CONF_DEBUG: user_input.get(CONF_DEBUG, False),
                     }
 
-                    # Ajout des infos MQTT seulement si l'hôte est renseigné
+                    # 4. Ajout MQTT si renseigné
                     if user_input.get(CONF_MQTT_HOST):
                         data.update({
                             CONF_MQTT_HOST: user_input[CONF_MQTT_HOST],
@@ -72,12 +73,12 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         })
 
                     return self.async_create_entry(
-                        title=f"StorCube ({device_ids[0]})",
+                        title=f"StorCube ({primary_id})",
                         data=data,
                     )
 
             except Exception as err:
-                _LOGGER.exception("Erreur inattendue : %s", err)
+                _LOGGER.exception("Erreur flux de configuration : %s", err)
                 errors["base"] = "unknown"
 
         return self.async_show_form(
@@ -87,7 +88,7 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     def _schema(self, user_input=None):
-        """Définit le schéma du formulaire (MQTT rendu optionnel)."""
+        """Schéma du formulaire."""
         if user_input is None:
             user_input = {}
 
@@ -96,10 +97,9 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_LOGIN_NAME, default=user_input.get(CONF_LOGIN_NAME, "")): str,
                 vol.Required(CONF_AUTH_PASSWORD, default=user_input.get(CONF_AUTH_PASSWORD, "")): str,
                 vol.Required(CONF_DEVICE_IDS, default=user_input.get(CONF_DEVICE_IDS, "")): str,
-                
                 vol.Optional(CONF_APP_CODE, default=DEFAULT_APP_CODE): str,
                 
-                # Section MQTT (Optionnelle : l'utilisateur peut laisser vide)
+                # MQTT Optionnel
                 vol.Optional(CONF_MQTT_HOST): str,
                 vol.Optional(CONF_MQTT_PORT, default=DEFAULT_MQTT_PORT): int,
                 vol.Optional(CONF_MQTT_USER): str,
@@ -116,7 +116,7 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class StorcubeOptionsFlow(config_entries.OptionsFlow):
-    """Gestion des options (Paramètres modifiables après installation)."""
+    """Gestion des options."""
 
     def __init__(self, entry):
         self.entry = entry
