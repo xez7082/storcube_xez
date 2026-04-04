@@ -29,7 +29,7 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.data = {"soc": 0.0, "power": 0.0, "pv": 0.0, "online": False, ATTR_EXTRA_STATE: {}}
 
     async def _async_get_token(self) -> str | None:
-        """Récupère le token d'authentification."""
+        """Récupère le token via l'API."""
         payload = {
             "loginName": self.entry.data.get(CONF_LOGIN_NAME),
             "password": self.entry.data.get(CONF_AUTH_PASSWORD),
@@ -38,7 +38,8 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         session = async_get_clientsession(self.hass)
         try:
             async with async_timeout.timeout(10):
-                response = await session.post(TOKEN_URL, json=payload)
+                # On essaie de récupérer le token en HTTPS
+                response = await session.post(TOKEN_URL.replace("http://", "https://"), json=payload)
                 res_data = await response.json()
                 return res_data.get("data", {}).get("token")
         except Exception as e:
@@ -46,35 +47,38 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return None
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Scan des domaines Baterway et Storcube pour trouver tes appareils."""
+        """Scan final avec protocoles sécurisés et chemins v1/app."""
         if not self._token:
             self._token = await self._async_get_token()
 
         if not self._token:
             raise Exception("Échec d'authentification.")
 
-        # On teste les deux domaines possibles avec les endpoints les plus courants
+        # Liste des endpoints les plus probables en HTTPS
         scanners = [
-            {"base": "http://api.storcube.com", "path": "/api/device/list"},
-            {"base": "http://api.storcube.com", "path": "/api/equip/list"},
-            {"base": "http://api.storcube.com", "path": "/api/station/list"},
-            {"base": "http://baterway.com", "path": "/api/device/list"},
-            {"base": "http://baterway.com", "path": "/api/equip/list"},
+            "https://api.storcube.com/api/v1/app/equip/list",
+            "https://api.storcube.com/api/v1/device/list",
+            "https://api.storcube.com/api/equip/list",
+            "https://baterway.com/api/v1/app/equip/list",
+            "https://baterway.com/api/equip/list"
         ]
         
         session = async_get_clientsession(self.hass)
         scan_results = []
 
-        for scan in scanners:
-            url = f"{scan['base']}{scan['path']}"
+        for url in scanners:
             try:
-                # Ajout des headers complets pour simuler l'App
-                headers = {"token": self._token, "appCode": "Storcube"}
-                async with session.get(url, headers=headers, timeout=5) as resp:
+                headers = {
+                    "token": self._token,
+                    "appCode": "Storcube",
+                    "User-Agent": "Dart/3.0 (dart:io)", # Simule l'app Flutter/Dart
+                    "Content-Type": "application/json"
+                }
+                async with session.get(url, headers=headers, timeout=10) as resp:
                     res = await resp.json()
                     data_raw = res.get("data", [])
                     
-                    # On cherche une liste d'appareils
+                    # On cherche la liste d'appareils (gestion des formats objet ou liste)
                     items = data_raw if isinstance(data_raw, list) else data_raw.get("list", []) if isinstance(data_raw, dict) else []
                     
                     if items and len(items) > 0:
@@ -85,12 +89,12 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             output.append(f"[{name}: ID={oid}]")
                         
                         final_msg = " / ".join(output)
-                        _LOGGER.error("!!! VICTOIRE SUR %s !!!", url)
+                        _LOGGER.error("!!! VICTOIRE !!! Endpoint: %s", url)
                         raise Exception(f"TES IDENTIFIANTS REELS SONT ICI -> {final_msg}")
                     
-                    scan_results.append(f"{scan['path']}: {resp.status}")
+                    scan_results.append(f"{url.split('/')[-2]}: {resp.status}")
             except Exception as e:
                 if "TES IDENTIFIANTS" in str(e): raise e
-                scan_results.append(f"{url}: Err")
+                scan_results.append(f"{url.split('/')[-1]}: {type(e).__name__}")
 
-        raise Exception(f"AUCUN APPAREIL TROUVE. Resultats : {', '.join(scan_results[:4])}")
+        raise Exception(f"SCAN HTTPS TERMINE. Résultats : {', '.join(scan_results[:4])}")
