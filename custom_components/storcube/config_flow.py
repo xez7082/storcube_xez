@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
+from typing import Any  # <--- AJOUT INDISPENSABLE
+
 import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.core import callback
-from homeassistant.data_entry_flow import FlowResult, AbortFlow
+from homeassistant.data_entry_flow import FlowResult
 
 from .const import (
     DOMAIN,
@@ -77,8 +79,6 @@ class StorcubeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         data=data,
                     )
 
-            except AbortFlow:
-                raise
             except Exception as err:
                 _LOGGER.exception("Erreur flux de configuration : %s", err)
                 errors["base"] = "unknown"
