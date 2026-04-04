@@ -7,7 +7,7 @@ from typing import Any
 import async_timeout
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
@@ -25,13 +25,12 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             hass,
             _LOGGER,
             name=DOMAIN,
-            # On peut augmenter l'intervalle car le MQTT fera le travail en temps réel
             update_interval=timedelta(seconds=SCAN_INTERVAL_SECONDS),
         )
         self.entry = entry
         self._token: str | None = None
         
-        # Initialisation avec des valeurs par défaut
+        # Initialisation avec des clés sécurisées pour éviter les erreurs d'affichage
         self.data: dict[str, Any] = {
             "soc": 0,
             "invPower": 0,
@@ -42,27 +41,45 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
     def update_from_ws(self, payload: dict[str, Any]) -> None:
-        """
-        Méthode appelée par __init__.py lors de la réception d'un message MQTT.
-        C'est ici que tes 180W arrivent !
-        """
-        _LOGGER.debug("Mise à jour temps réel (MQTT) : %s", payload)
+        """Réception et traitement des messages MQTT (Temps Réel)."""
+        _LOGGER.debug("MQTT REÇU : %s", payload)
         
-        # On fusionne les nouvelles données MQTT avec les données existantes
-        # Si le payload est une liste (cas fréquent Storcube), on prend le premier élément
-        if "list" in payload and isinstance(payload["list"], list) and len(payload["list"]) > 0:
-            new_data = payload["list"][0]
-        else:
-            new_data = payload
+        # Extraction si le payload est enveloppé dans une liste
+        new_data = {}
+        if isinstance(payload, dict):
+            if "list" in payload and isinstance(payload["list"], list) and len(payload["list"]) > 0:
+                new_data = payload["list"][0]
+            else:
+                new_data = payload
 
-        # Mise à jour du dictionnaire de données interne
+        if not new_data:
+            return
+
+        # --- MAPPING DE SÉCURITÉ ---
+        # Si la batterie utilise des noms différents, on les convertit ici
+        # Exemple : 'p_out' -> 'invPower', 'p_pv1' -> 'pv1power'
+        mapping = {
+            "p_out": "invPower",
+            "p_pv1": "pv1power",
+            "p_pv2": "pv2power",
+            "battery_soc": "soc",
+            "outputPower": "invPower",
+            "pvPower": "pv1power"
+        }
+
+        for cloud_key, local_key in mapping.items():
+            if cloud_key in new_data:
+                new_data[local_key] = new_data[cloud_key]
+
+        # Mise à jour des données globales
         self.data.update(new_data)
         
-        # CRUCIAL : Informe Home Assistant que les données ont changé pour rafraîchir les capteurs
+        # On force HA à mettre à jour les sensors immédiatement
         self.async_set_updated_data(self.data)
+        _LOGGER.info("Capteurs Storcube mis à jour via MQTT")
 
     async def _async_get_token(self) -> str | None:
-        """Récupère le token d'authentification."""
+        """Récupère le token d'authentification sur le Cloud."""
         login = self.entry.data.get(CONF_LOGIN_NAME)
         password = self.entry.data.get(CONF_AUTH_PASSWORD)
 
@@ -81,24 +98,17 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 response = await session.post(TOKEN_URL, json=payload)
                 res_data = await response.json()
                 token = res_data.get("data", {}).get("token")
-                if token:
-                    _LOGGER.info("Nouveau Token Cloud StorCube récupéré")
-                    return token
+                return token
         except Exception as e:
-            _LOGGER.debug("Erreur lors de la récupération du token Cloud : %s", e)
-        
+            _LOGGER.debug("Erreur Token (Optionnel si MQTT fonctionne) : %s", e)
         return None
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """
-        Rafraîchissement périodique (Cloud).
-        Si le Cloud échoue, on retourne les dernières données MQTT stockées.
-        """
+        """Rafraîchissement périodique (Cloud)."""
         if not self._token:
             self._token = await self._async_get_token()
 
         if not self._token:
-            # Si pas de token, on ne lève pas d'erreur, on garde les données MQTT
             return self.data
 
         session = async_get_clientsession(self.hass)
@@ -106,16 +116,14 @@ class StorCubeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         
         try:
             async with async_timeout.timeout(10):
-                # On essaie de récupérer le statut détaillé si l'ID est connu
-                # (Adaptation selon ton besoin Cloud)
+                # On tente de récupérer la liste des équipements pour voir si des infos s'y trouvent
                 async with session.get("http://baterway.com/api/equip/list", headers=headers) as resp:
                     if resp.status == 200:
                         res = await resp.json()
-                        # Si des données utiles sont dans 'res', tu peux les merger ici :
-                        # cloud_data = res.get("data", [{}])[0]
-                        # self.data.update(cloud_data)
-                        pass
+                        # Si le cloud contient des données, on les injecte
+                        if "data" in res and isinstance(res["data"], list) and len(res["data"]) > 0:
+                            self.data.update(res["data"][0])
         except Exception as err:
-            _LOGGER.debug("Échec du rafraîchissement périodique Cloud : %s", err)
+            _LOGGER.debug("Échec rafraîchissement Cloud : %s", err)
 
         return self.data
