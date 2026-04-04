@@ -9,19 +9,17 @@ DOMAIN: Final = "storcube"
 NAME: Final = "Storcube"
 VERSION: Final = "1.2.4"
 MANUFACTURER: Final = "Storcube"
-DEVELOPER: Final = "xez7082"
 
 # =========================================================
-# CONFIG KEYS
+# CONFIG KEYS (Alignement avec sensor.py)
 # =========================================================
-CONF_DEVICE_ID: Final = "device_id"
-CONF_DEVICE_IDS: Final = "device_ids"
+# On garde une seule clé principale pour éviter les erreurs dans sensor.py
+CONF_DEVICE_ID: Final = "device_id" 
+CONF_DEVICE_IDS: Final = "device_ids" # Utilisé si tu as plusieurs batteries
 
 CONF_APP_CODE: Final = "app_code"
 CONF_LOGIN_NAME: Final = "login_name"
 CONF_AUTH_PASSWORD: Final = "auth_password"
-
-CONF_DEBUG: Final = "debug"
 
 # MQTT CONFIG
 CONF_MQTT_HOST: Final = "mqtt_host"
@@ -36,36 +34,29 @@ CONF_MQTT_TOPIC: Final = "mqtt_topic"
 DEFAULT_APP_CODE: Final = "Storcube"
 DEFAULT_MQTT_HOST: Final = "baterway.com"
 DEFAULT_MQTT_PORT: Final = 1883
-DEFAULT_MQTT_TOPIC: Final = "storcube/{device_id}/#"
+# Le format de topic utilisé par Storcube pour le monitoring
+DEFAULT_MQTT_TOPIC: Final = "storcube/{device_id}/#" 
 
 # =========================================================
-# API ENDPOINTS (Passage en HTTP total pour éviter les Timeouts)
+# API ENDPOINTS
 # =========================================================
-# On abandonne le HTTPS qui cause les erreurs de 15.001s
 BASE_URL: Final = "http://baterway.com"
 
 TOKEN_URL: Final = f"{BASE_URL}/api/user/app/login"
-
-# Utilise DETAIL_URL pour récupérer les capteurs réels
-DETAIL_URL: Final = f"{BASE_URL}/api/equip/detail?equipId="
-STATUS_URL: Final = f"{BASE_URL}/api/equip/status?equipId="
-
-SCENE_URL: Final = f"{BASE_URL}/api/scene/user/list/V2?equipId="
-FIRMWARE_URL: Final = f"{BASE_URL}/api/equip/version/need/upgrade?equipId="
+DETAIL_URL: Final = f"{BASE_URL}/api/equip/detail" # On retire le ? car on l'ajoute en paramètre
+STATUS_URL: Final = f"{BASE_URL}/api/equip/status"
 
 SET_POWER_URL: Final = f"{BASE_URL}/api/slb/equip/set/power"
 SET_THRESHOLD_URL: Final = f"{BASE_URL}/api/scene/threshold/set"
 
 # =========================================================
-# PAYLOAD MAPPING (Clés JSON Batterie)
+# PAYLOAD MAPPING (Pour la S1000)
 # =========================================================
+# Ces clés doivent correspondre aux noms dans les messages MQTT de la S1000
 PAYLOAD_KEY_SOC: Final = "soc"
-PAYLOAD_KEY_POWER: Final = "outputPower"
-PAYLOAD_KEY_PV: Final = "pvPower"
-PAYLOAD_KEY_ONLINE: Final = "online"
-
-# Clé pour les attributs étendus
-ATTR_EXTRA_STATE: Final = "extra"
+PAYLOAD_KEY_POWER: Final = "invPower" # Souvent 'invPower' sur S1000
+PAYLOAD_KEY_PV: Final = "pv1power"    # Souvent 'pv1power' sur S1000
+PAYLOAD_KEY_TEMP: Final = "temp"
 
 # =========================================================
 # ICONS & TIMING
@@ -77,5 +68,4 @@ ICON_SOLAR: Final = "mdi:solar-power"
 SCAN_INTERVAL_SECONDS: Final = 30
 TIMEOUT_SECONDS: Final = 15
 
-# Intervalle formaté pour le coordinateur
 MIN_TIME_BETWEEN_UPDATES = timedelta(seconds=SCAN_INTERVAL_SECONDS)
