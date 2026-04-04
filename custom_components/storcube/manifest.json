@@ -1,10 +1,12 @@
 {
   "domain": "storcube",
   "name": "Storcube",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "config_flow": true,
   "documentation": "https://github.com/xez7082/storcube",
   "issue_tracker": "https://github.com/xez7082/storcube/issues",
   "codeowners": ["@xez7082"],
-  "iot_class": "cloud_polling"
+  "iot_class": "cloud_polling",
+  "requirements": [],
+  "dependencies": ["mqtt"]
 }
